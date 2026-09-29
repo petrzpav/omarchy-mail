@@ -32,6 +32,13 @@ which only accepts From addresses verified as "Send mail as" in Gmail settings. 
 address, give that identity `smtp = "host:port"` in config.toml and put its password in secrets
 as `SMTP_PASSWORD_<ADDRESS_IN_CAPS_WITH_UNDERSCORES>`.
 
+In a sidebar beside the text, Jev grades what you wrote. In a reply it checks every question and
+request of the original and lists the ones you haven't answered yet. Then clarity, tone, length,
+next step and language, each as a green / yellow / red bar. It refreshes whenever you stop typing
+for a few seconds (`review_auto = false` under `[jev]` turns that off) and on `Alt+J`. Your own
+criteria can replace the defaults: `[[review]]` entries with `name`, `question`, `good`, `ok`,
+`poor` (and `reply_only = true`).
+
 Auto-sort: `systemctl --user enable --now mail-sort.timer` after linking the units from
 `systemd/` (`systemctl --user link …`). Every decision is logged to
 `~/.local/state/petrzpav-mail/sort.log`. "Jev history" in the palette puts a message back.

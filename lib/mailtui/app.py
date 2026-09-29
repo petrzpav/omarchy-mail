@@ -25,6 +25,7 @@ from textual.widgets import (Collapsible, DataTable, Footer, Input, Label, Optio
                              Static, TextArea)
 from textual.widgets._collapsible import CollapsibleTitle
 from textual.widgets.option_list import Option
+from textual.worker import get_current_worker
 
 from . import config, drafts, jev, ops, smtp, text
 from .config import CACHE_DIR, Category, Config
@@ -52,6 +53,7 @@ KEY_HELP = [
     ("{new}  ·  {reply}  ·  {reply_all}  ·  {forward}", "new · reply · reply all · forward"),
     ("{send}  ·  Esc  ·  {discard}", "compose: send · minimize to a draft · discard"),
     ("{sender}  ·  ↑↓ Enter", "compose: choose the From address · pick a suggested To/Cc address"),
+    ("{review}", "compose: ask Jev how good the message is (also when typing pauses)"),
     ("{drafts}", "continue a draft (saved automatically, also in Gmail's Drafts)"),
     ("{add_category}  ·  {rename_category}", "add category · rename the current one"),
     ("{refresh}", "refresh"),
@@ -267,18 +269,22 @@ class Compose(ModalScreen[str]):
 
     LOCAL_DELAY = 1.0     # seconds of quiet before saving locally
     GMAIL_EVERY = 15.0    # at most this often to Gmail while typing
+    REVIEW_DELAY = 4.0    # seconds of quiet before Jev grades the message
+    REVIEW_MIN = 20       # characters written before it's worth grading
 
     BINDINGS = [Binding("escape", "minimize", "Minimize")]
 
     def __init__(self, app_cfg: Config, keys: dict, draft: drafts.Draft, store: Store):
         super().__init__()
         self.cfg, self.keys, self.draft, self.store = app_cfg, keys, draft, store
-        self._local_timer = self._gmail_timer = None
+        self._local_timer = self._gmail_timer = self._review_timer = None
+        self._reviewed = ""               # the body the shown grades are for
         self._last_gmail = 0.0
         self._ready = False
         self._bindings.bind(keys["send"], "send", description="Send", priority=True)
         self._bindings.bind(keys["discard"], "discard", description="Discard", priority=True)
         self._bindings.bind(keys["sender"], "sender", description="From", priority=True)
+        self._bindings.bind(keys["review"], "review", description="Jev review", priority=True)
 
     def compose(self) -> ComposeResult:
         d = self.draft
@@ -291,35 +297,42 @@ class Compose(ModalScreen[str]):
         with Vertical(classes="compose"):
             yield Label(d.subject if reply and d.subject else "New message", classes="dialog-title",
                         markup=False)
-            for fid, label, value in (("to", "To", d.to), ("cc", "Cc", d.cc), ("subject", "Subject", d.subject)):
-                with Horizontal(classes="row") as row:
-                    row.display = not (reply and fid == "subject")    # the title says it
-                    yield Label(label, classes="field")
-                    if fid == "subject":
-                        yield Input(value=value, id=fid, compact=True)
-                    else:
-                        yield AddressInput(self.store.contacts, value=value, id=fid, compact=True)
-                if fid != "subject":
-                    yield OptionList(id=f"{fid}-suggest", classes="suggest")
-            # After the recipients, so Tab from To/Cc/Subject reaches it before the body.
-            with Horizontal(classes="row", id="from-row") as row:
-                row.display = len(idents) > 1
-                yield Label("From", classes="field")
-                yield Select(idents, value=d.ident, allow_blank=False, id="from", compact=True)
-            if d.attachments:
-                yield Static("📎 " + ", ".join(a["filename"] for a in d.attachments), classes="note")
-            yield TextArea(d.body, id="body", soft_wrap=True, show_line_numbers=False, compact=True)
-            if d.quote:
-                head, said = quote_context(d.quote)
-                yield Static("↩ " + head, classes="context-head", markup=False)
-                with VerticalScroll(id="context", can_focus=False):
-                    yield Static(said, markup=False)
+            with Horizontal(id="compose-main"):
+                with Vertical(id="compose-left"):
+                    for fid, label, value in (("to", "To", d.to), ("cc", "Cc", d.cc), ("subject", "Subject", d.subject)):
+                        with Horizontal(classes="row") as row:
+                            row.display = not (reply and fid == "subject")    # the title says it
+                            yield Label(label, classes="field")
+                            if fid == "subject":
+                                yield Input(value=value, id=fid, compact=True)
+                            else:
+                                yield AddressInput(self.store.contacts, value=value, id=fid, compact=True)
+                        if fid != "subject":
+                            yield OptionList(id=f"{fid}-suggest", classes="suggest")
+                    # After the recipients, so Tab from To/Cc/Subject reaches it before the body.
+                    with Horizontal(classes="row", id="from-row") as row:
+                        row.display = len(idents) > 1
+                        yield Label("From", classes="field")
+                        yield Select(idents, value=d.ident, allow_blank=False, id="from", compact=True)
+                    if d.attachments:
+                        yield Static("📎 " + ", ".join(a["filename"] for a in d.attachments), classes="note")
+                    yield TextArea(d.body, id="body", soft_wrap=True, show_line_numbers=False, compact=True)
+                    if d.quote:
+                        head, said = quote_context(d.quote)
+                        yield Static("↩ " + head, classes="context-head", markup=False)
+                        with VerticalScroll(id="context", can_focus=False):
+                            yield Static(said, markup=False)
+                # Jev's review, always open beside the text.
+                with VerticalScroll(id="jev-side", can_focus=False):
+                    yield Static(self._review_text(None), id="review")
+                    yield Static(("grades when you pause typing, or " if self.cfg.review_auto else "")
+                                 + pretty(self.keys["review"]), id="review-status")
             yield Static(self._hint(), id="compose-hint", classes="note")
 
     def _hint(self, status: str = "") -> str:
         k = {n: pretty(v) for n, v in self.keys.items()}
         return (f"{k['send']} send  ·  Esc minimize  ·  {k['discard']} discard  ·  {k['sender']} from"
-                "  ·  Tab next field"
+                f"  ·  {k['review']} Jev  ·  Tab next field"
                 + (f"  ·  {status}" if status else ""))
 
     def on_mount(self):
@@ -362,12 +375,18 @@ class Compose(ModalScreen[str]):
     @on(Input.Changed)
     @on(TextArea.Changed)
     @on(Select.Changed)
-    def _changed(self, _event):
+    def _changed(self, event):
         if not self._ready:
             return
         if self._local_timer:
             self._local_timer.stop()
         self._local_timer = self.set_timer(self.LOCAL_DELAY, self._save_local)
+        if isinstance(event, TextArea.Changed):
+            self.query_one("#review").set_class(event.text_area.text != self._reviewed, "stale")
+            if self.cfg.review_auto:
+                if self._review_timer:
+                    self._review_timer.stop()
+                self._review_timer = self.set_timer(self.REVIEW_DELAY, lambda: self.action_review(quiet=True))
 
     def _save_local(self):
         self._collect()
@@ -390,8 +409,74 @@ class Compose(ModalScreen[str]):
         self.store.submit("drafts", lambda: drafts.sync_to_gmail(self.cfg, self.store.drafts_mbox, d),
                           latest=f"draft:{d.id}")
 
+    # -- Jev review
+
+    def action_review(self, quiet=False):
+        body = self.query_one("#body", TextArea).text
+        if len(body.strip()) < self.REVIEW_MIN or body == self._reviewed:
+            if not quiet:
+                self.notify("Write a bit more first" if len(body.strip()) < self.REVIEW_MIN
+                            else "Jev already graded this text", timeout=2)
+            return
+        self.query_one("#review-status", Static).update(Text("reading…", style="dim"))
+        self._review(body, self.query_one("#subject", Input).value,
+                     quote_context(self.draft.quote)[1] if self.draft.quote else "")
+
+    @work(thread=True, exclusive=True, group="review")
+    def _review(self, body: str, subject: str, original: str):
+        try:
+            grades = jev.review(self.cfg, body, subject, original)
+        except jev.JevError as e:
+            grades = str(e)
+        if not get_current_worker().is_cancelled:     # a newer review took over
+            self.app.call_from_thread(self._show_review, body, grades)
+
+    def _criteria(self) -> list[str]:
+        return [c.name for c in self.cfg.review or jev.CRITERIA if self.draft.quote or not c.reply_only]
+
+    def _review_text(self, review: "jev.Review | None") -> Text:
+        """The sidebar: a bar per criterion (empty before the first review), then what's unanswered."""
+        out = Text()
+        out.append("Jev\n\n", style="bold")
+        names = self._criteria()
+        width = max(map(len, names + ["answered"])) + 2
+        if self.draft.quote:
+            out.append("answered".ljust(width))
+            if review and review.asked:
+                ok = review.asked - len(review.missed)
+                out.append(f"{ok}/{review.asked}", style="green" if not review.missed else "red")
+            else:
+                out.append("–" if review else "·", style="bright_black")
+            out.append("\n")
+        for name in names:
+            out.append(name.ljust(width))
+            g = review.grades.get(name) if review else None
+            filled = round(g.score * 5) if g else 0
+            colour = "green" if g and g.score >= 0.7 else "yellow" if g and g.score >= 0.4 else "red"
+            out.append("━" * filled, style=colour)
+            out.append("━" * (5 - filled) + "\n", style="bright_black")
+        if review and review.missed:
+            out.append("\nNot answered\n", style="bold red")
+            for sent in review.missed:
+                out.append("✗ ", style="red")
+                out.append(sent + "\n")
+        return out
+
+    def _show_review(self, body: str, review):
+        if not self.is_attached:
+            return
+        status = self.query_one("#review-status", Static)
+        if isinstance(review, str):
+            status.update(Text(review, style="red"))
+            return
+        self._reviewed = body
+        status.update("")
+        w = self.query_one("#review", Static)
+        w.update(self._review_text(review))
+        w.set_class(self.query_one("#body", TextArea).text != body, "stale")
+
     def _stop_timers(self):
-        for t in (self._local_timer, self._gmail_timer):
+        for t in (self._local_timer, self._gmail_timer, self._review_timer):
             if t:
                 t.stop()
 
@@ -1878,7 +1963,7 @@ class MailApp(App):
     .dialog-title { text-style: bold; padding-bottom: 1; }
     .note { color: $text-muted; padding-top: 1; }
     ModalScreen { align: center middle; }
-    .compose { width: 100; max-width: 98%; height: 90%; border: round $accent; background: $surface;
+    .compose { width: 136; max-width: 98%; height: 90%; border: round $accent; background: $surface;
                padding: 1 2; }
     .compose .row { height: 1; }
     .compose .field { width: 9; color: $text-muted; }
@@ -1892,6 +1977,12 @@ class MailApp(App):
     .compose .suggest > .option-list--option-highlighted { background: ansi_blue; color: ansi_black; }
     .compose TextArea { height: 1fr; margin-top: 1; padding: 1 0 0 0; background: $surface;
                         border-top: hkey ansi_bright_black; }
+    .compose #compose-main { height: 1fr; }
+    .compose #compose-left { width: 1fr; }
+    .compose #jev-side { width: 34; margin-left: 2; padding: 0 0 0 2; border-left: vkey ansi_bright_black;
+                         scrollbar-size-vertical: 1; }
+    .compose #review-status { color: $text-muted; padding-top: 1; }
+    .compose #review.stale { text-opacity: 50%; }
     .compose .context-head { color: $text-muted; margin-top: 1; text-wrap: nowrap; text-overflow: ellipsis; }
     .compose #context { height: auto; max-height: 35%; color: $text-muted; padding: 0 0 0 1;
                         border-left: outer ansi_bright_black; scrollbar-size-vertical: 1; }

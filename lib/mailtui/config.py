@@ -35,6 +35,7 @@ DEFAULT_KEYS = {
     "drafts": "ctrl+o",
     "discard": "alt+d",
     "sender": "alt+s",
+    "review": "alt+j",
 }
 
 
@@ -76,6 +77,8 @@ class Config:
     jev_model: str = "jev-latest"
     jev_threshold: float = 0.85
     sort_interval: int = 5
+    review_auto: bool = True   # grade a message with Jev whenever typing pauses
+    review: list = field(default_factory=list)   # jev.Criterion list; empty = jev.CRITERIA
     identities: list[Identity] = field(default_factory=list)
     categories: list[Category] = field(default_factory=list)
     rules: list[Rule] = field(default_factory=list)
@@ -126,12 +129,16 @@ def load() -> Config:
         jev_model=jev.get("model", "jev-latest"),
         jev_threshold=float(jev.get("threshold", 0.85)),
         sort_interval=int(jev.get("interval", 5)),
+        review_auto=bool(jev.get("review_auto", True)),
         identities=[Identity(**i) for i in raw.get("identity", [])],
         rules=[Rule(**r) for r in raw.get("rule", [])],
         keys={**DEFAULT_KEYS, **raw.get("keys", {})},
         secrets=read_secrets(CONFIG_DIR / "secrets"),
     )
     cfg.categories = load_categories()
+    if raw.get("review"):
+        from .jev import Criterion
+        cfg.review = [Criterion(**c) for c in raw["review"]]
     return cfg
 
 
