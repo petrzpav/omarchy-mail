@@ -1144,6 +1144,9 @@ class MainScreen(Screen):
         self._opening = c.msgid
         self._follow_latest = True     # until the user moves, the newest message stays open
         full = self.store.cached_thread(c.thrid) or (list(c.msgs) if not c.thrid else None)
+        if full and c.thrid:
+            # A cached draft is likely sent or discarded by now; the fetch below brings back live ones.
+            full = [m for m in full if "\\Draft" not in m.labels] or None
         self.bodies = {}
         for m in (full or c.msgs):
             raw = self.store.cached_body(m)
@@ -1233,6 +1236,13 @@ class MainScreen(Screen):
                 if raw is not None:
                     self.bodies[m.msgid] = parse(raw)
         shown = {w.msg.msgid: w for w in self._message_widgets()}
+        keep = {m.msgid for m in full}
+        refocus = False
+        for msgid, w in list(shown.items()):
+            if msgid not in keep:                           # gone from Gmail (a sent or discarded draft)
+                refocus |= w.has_focus_within
+                w.remove()
+                del shown[msgid]
         old_newest = self.thread_msgs[-1].msgid if self.thread_msgs else None
         new_newest = full[-1].msgid if full else None
         follow = getattr(self, "_follow_latest", False) and new_newest != old_newest
@@ -1257,6 +1267,8 @@ class MainScreen(Screen):
                 w.collapsed = True
         self.thread_msgs = list(full)
         self._paint_reader_header()
+        if refocus and not follow and new_newest:
+            self.call_after_refresh(self._focus_message, new_newest)
         if follow:
             self.call_after_refresh(self._focus_message, new_newest, 25, True)
 
