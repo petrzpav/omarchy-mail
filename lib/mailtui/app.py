@@ -1,6 +1,7 @@
 """The Textual client: categories | message list | reader, with arrow-key navigation."""
 
 import os
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -181,6 +182,20 @@ class Help(ModalScreen):
                          classes="note", markup=False)
 
 
+def quote_context(quote: str) -> tuple[str, str]:
+    """A reply's quote as (who wrote it when, just what they said), to read while writing."""
+    head, _, rest = quote.partition("\n")
+    if not head.rstrip().endswith(":"):
+        head, rest = "", quote
+    said = "\n".join(l[2:] if l.startswith("> ") else l[1:] if l.startswith(">") else l
+                     for l in rest.splitlines())
+    said = text.reflow(text.split_quoted(said)[0].strip())
+    head = head.rstrip().rstrip(":")
+    if m := re.fullmatch(r"On (.+?), (.+?)(?: <[^>]*>)? wrote", head):   # the line _reply writes
+        head = f"{m[2]}  ·  {m[1]}"
+    return head or "Earlier message", said
+
+
 class Compose(ModalScreen[str]):
     """Writing a message. Saved as you type (locally at once, to Gmail's Drafts every few
     seconds); Esc tucks it away as a draft, Alt+D throws it away, Ctrl+S sends.
@@ -206,24 +221,33 @@ class Compose(ModalScreen[str]):
                  [(self.cfg.email, self.cfg.email)]
         if d.ident not in [v for _, v in idents]:
             idents.append((d.ident, d.ident))
+        reply = bool(d.headers.get("In-Reply-To"))
         with Vertical(classes="compose"):
-            yield Label("Reply" if d.headers.get("In-Reply-To") else "New message", classes="dialog-title")
-            with Horizontal(classes="row"):
+            yield Label(d.subject if reply and d.subject else "New message", classes="dialog-title",
+                        markup=False)
+            with Horizontal(classes="row", id="from-row") as row:
+                row.display = len(idents) > 1
                 yield Label("From", classes="field")
-                yield Select(idents, value=d.ident, allow_blank=False, id="from")
+                yield Select(idents, value=d.ident, allow_blank=False, id="from", compact=True)
             for fid, label, value in (("to", "To", d.to), ("cc", "Cc", d.cc), ("subject", "Subject", d.subject)):
-                with Horizontal(classes="row"):
+                with Horizontal(classes="row") as row:
+                    row.display = not (reply and fid == "subject")    # the title says it
                     yield Label(label, classes="field")
-                    yield Input(value=value, id=fid)
+                    yield Input(value=value, id=fid, compact=True)
             if d.attachments:
                 yield Static("📎 " + ", ".join(a["filename"] for a in d.attachments), classes="note")
-            yield TextArea(d.body, id="body", soft_wrap=True, show_line_numbers=False)
+            yield TextArea(d.body, id="body", soft_wrap=True, show_line_numbers=False, compact=True)
+            if d.quote:
+                head, said = quote_context(d.quote)
+                yield Static("↩ " + head, classes="context-head", markup=False)
+                with VerticalScroll(id="context", can_focus=False):
+                    yield Static(said, markup=False)
             yield Static(self._hint(), id="compose-hint", classes="note")
 
     def _hint(self, status: str = "") -> str:
         k = {n: pretty(v) for n, v in self.keys.items()}
-        return (f"{k['send']} send    Esc minimize (keeps the draft)    {k['discard']} discard    "
-                f"Tab next field" + (f"    ·  {status}" if status else ""))
+        return (f"{k['send']} send  ·  Esc minimize  ·  {k['discard']} discard  ·  Tab next field"
+                + (f"  ·  {status}" if status else ""))
 
     def on_mount(self):
         self.query_one("#to" if not self.draft.to else "#body").focus()
@@ -1620,8 +1644,8 @@ class MainScreen(Screen):
                 cc = ", ".join(others)
             refs = " ".join(x for x in (parsed.get("References", ""), m.message_id) if x).strip()
             headers = {"In-Reply-To": m.message_id, "References": refs} if m.message_id else {}
-            quoted = f"\n\nOn {when}, {m.sender} <{m.sender_addr}> wrote:\n{text.quote(body)}\n"
-            self.open_compose(ident=ident.email, to=str(reply_to), cc=cc, subject=subj, body=quoted,
+            quoted = f"On {when}, {m.sender} <{m.sender_addr}> wrote:\n{text.quote(body)}"
+            self.open_compose(ident=ident.email, to=str(reply_to), cc=cc, subject=subj, quote=quoted,
                           headers=headers)
 
         if m.msgid in self.bodies:
@@ -1762,10 +1786,15 @@ class MailApp(App):
     ModalScreen { align: center middle; }
     .compose { width: 100; max-width: 98%; height: 90%; border: round $accent; background: $surface;
                padding: 1 2; }
-    .compose .row { height: auto; }
-    .compose .field { width: 9; padding: 1 1 0 0; color: $text-muted; }
-    .compose Input, .compose Select { width: 1fr; }
-    .compose TextArea { height: 1fr; margin-top: 1; }
+    .compose .row { height: 1; }
+    .compose .field { width: 9; color: $text-muted; }
+    .compose Input, .compose Select { width: 1fr; background: $surface; }
+    .compose Input:focus { background: $boost; }
+    .compose TextArea { height: 1fr; margin-top: 1; padding: 1 0 0 0; background: $surface;
+                        border-top: hkey ansi_bright_black; }
+    .compose .context-head { color: $text-muted; margin-top: 1; text-wrap: nowrap; text-overflow: ellipsis; }
+    .compose #context { height: auto; max-height: 35%; color: $text-muted; padding: 0 0 0 1;
+                        border-left: outer ansi_bright_black; scrollbar-size-vertical: 1; }
     /* The ANSI theme leaves selections the same colour as the background: make them visible. */
     TextArea > .text-area--selection { background: ansi_blue; color: ansi_black; text-style: none; }
     Input > .input--selection { background: ansi_blue; color: ansi_black; }

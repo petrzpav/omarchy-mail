@@ -26,7 +26,8 @@ class Draft:
     to: str = ""
     cc: str = ""
     subject: str = ""
-    body: str = ""
+    body: str = ""                                    # what I write
+    quote: str = ""                                   # the message replied to, sent below the body
     headers: dict = field(default_factory=dict)       # In-Reply-To / References of a reply
     attachments: list = field(default_factory=list)   # [{"path", "filename", "ctype"}]
     message_id: str = ""
@@ -51,9 +52,9 @@ class Draft:
         return not self.edited and not self.gmail_msgid
 
 
-def new(ident: str, to="", cc="", subject="", body="", headers=None, attach_parts=None,
+def new(ident: str, to="", cc="", subject="", body="", quote="", headers=None, attach_parts=None,
         message_id="", gmail_msgid=0) -> Draft:
-    d = Draft(id=uuid.uuid4().hex, ident=ident, to=to, cc=cc, subject=subject, body=body,
+    d = Draft(id=uuid.uuid4().hex, ident=ident, to=to, cc=cc, subject=subject, body=body, quote=quote,
               headers=dict(headers or {}), gmail_msgid=gmail_msgid, initial_body=body,
               message_id=message_id or make_msgid(domain=ident.split("@")[-1]))
     for part in attach_parts or []:
@@ -115,7 +116,7 @@ def build(cfg: Config, d: Draft) -> EmailMessage:
     for k, v in d.headers.items():
         if v:
             msg[k] = v
-    msg.set_content(d.body)
+    msg.set_content(d.body.rstrip() + ("\n\n" + d.quote if d.quote else "") + "\n")
     for a in d.attachments:
         try:
             data = open(a["path"], "rb").read()
@@ -145,9 +146,11 @@ def from_gmail(cfg: Config, m, parsed) -> Draft:
     from . import text
     to = str(parsed.get("To") or "")
     ident = cfg.identity_for(*[a for a in (m.sender_addr,) if a]).email
-    body = text.body_text(parsed)
+    body, quote = text.body_text(parsed), ""
+    if parsed.get("In-Reply-To"):
+        body, quote = text.split_quoted(body)
     d = new(ident, to=to, cc=str(parsed.get("Cc") or ""), subject=str(parsed.get("Subject") or ""),
-            body=body, headers={k: str(parsed.get(k)) for k in ("In-Reply-To", "References") if parsed.get(k)},
+            body=body, quote=quote, headers={k: str(parsed.get(k)) for k in ("In-Reply-To", "References") if parsed.get(k)},
             attach_parts=text.attachments(parsed), message_id=str(parsed.get("Message-ID") or ""),
             gmail_msgid=m.msgid)
     d.initial_body, d.edited = "", True
