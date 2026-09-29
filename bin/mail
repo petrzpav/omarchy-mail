@@ -1,0 +1,16 @@
+#!/bin/bash
+#
+# mail - light terminal Gmail client with Jev auto-sorting.
+#
+#   mail                          open the client
+#   mail compose [mailto:URL]     open straight into a new message
+#   mail unread [--cached]        print the inbox unread count
+#   mail sort [--dry-run]         let Jev sort new inbox mail into categories
+#   mail cat ls|add|rm|rename     manage categories (= Gmail labels)
+#
+# Config lives in ~/.config/petrzpav-mail (config.toml, categories.toml, secrets).
+
+root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/petrzpav-mail/venv"
+export PYTHONPATH="$root/lib${PYTHONPATH:+:$PYTHONPATH}"
+exec uv run --quiet --project "$root" python -m mailtui "$@"

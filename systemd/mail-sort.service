@@ -1,0 +1,7 @@
+[Unit]
+Description=Let Jev sort new inbox mail into categories
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.config/omarchy/plugins/petrzpav.mail/bin/mail sort

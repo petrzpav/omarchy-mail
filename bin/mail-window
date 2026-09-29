@@ -1,0 +1,13 @@
+#!/bin/bash
+#
+# mail-window - open (or focus) the mail client in its own terminal window.
+#
+#   mail-window                   the client
+#   mail-window compose [URL]     a new message in a separate window
+
+mail="$(dirname "$(readlink -f "$0")")/mail"
+
+if [[ ${1:-} == compose ]]; then
+  exec omarchy-launch-tui --app-id=org.omarchy.mailcompose "$mail" "$@"
+fi
+exec omarchy-launch-or-focus-tui --app-id=org.omarchy.mail "$mail"

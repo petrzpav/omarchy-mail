@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "id": "petrzpav.mail",
+  "name": "Mail",
+  "version": "0.1.0",
+  "author": "Pavel Petržela",
+  "license": "MIT",
+  "description": "Light terminal Gmail client with arrow-key navigation, categories as Gmail labels, and Jev (TypeSafe AI) auto-sorting.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Mail",
+    "description": "Inbox unread count. Click to open the mail client.",
+    "category": "Status",
+    "aliases": ["email", "gmail", "inbox", "jev"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": { "hideWhenRead": false },
+    "schema": [
+      {
+        "key": "hideWhenRead",
+        "type": "boolean",
+        "label": "Hide when inbox is read",
+        "description": "Only show the envelope while there is unread mail.",
+        "defaultValue": false
+      }
+    ]
+  }
+}

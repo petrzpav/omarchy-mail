@@ -1,0 +1,13 @@
+[project]
+name = "petrzpav-mail"
+version = "0.1.0"
+description = "Light terminal Gmail client for Omarchy with Jev auto-sorting"
+requires-python = ">=3.12"
+dependencies = [
+  "textual>=6",
+  "httpx>=0.27",
+  "html2text>=2024.2.26",
+]
+
+[tool.uv]
+package = false
