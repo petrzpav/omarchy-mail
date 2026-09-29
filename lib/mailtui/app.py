@@ -499,9 +499,8 @@ class Compose(ModalScreen[str]):
                 return
             self._stop_timers()
             d = self.draft
-            drafts.delete(d)
-            self.store.submit("drafts", lambda: drafts.remove_from_gmail(self.store.drafts_mbox, d),
-                              latest=f"draft:{d.id}")
+            drafts.forget(d)
+            self.store.submit("drafts", lambda: drafts.purge(self.store.drafts_mbox), latest=f"draft:{d.id}")
             self.dismiss("discarded")
         if self.draft.untouched:
             yes(True)
@@ -523,8 +522,8 @@ class Compose(ModalScreen[str]):
 
         def send():
             smtp.send(cfg, ident, drafts.build(cfg, d))
-            drafts.delete(d)
-            drafts.remove_from_gmail(store.drafts_mbox, d)
+            drafts.forget(d)
+            drafts.purge(store.drafts_mbox)
             return ident.email
 
         def sent(address):
@@ -752,6 +751,7 @@ class MainScreen(Screen):
         self.set_interval(60, self.poll)
         self.apply_layout()
         self.paint_drafts()
+        self.store.submit("drafts", lambda: drafts.tidy(self.store.drafts_mbox))
 
     # -- helpers
 

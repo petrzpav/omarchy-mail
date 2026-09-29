@@ -1,7 +1,9 @@
 """Drafts: saved locally as you type, mirrored to Gmail's Drafts so they follow you to the phone.
 
 A draft keeps one Message-ID for its whole life; every Gmail save appends the new version and
-removes the previous one, the way Gmail's own clients do.
+removes the previous one, the way Gmail's own clients do. A sent or discarded draft is written
+to GONE_FILE until Gmail confirms its copies are deleted, so closing the window mid-way leaves
+nothing behind: `tidy` finishes the job on the next start.
 """
 
 import json
@@ -16,6 +18,7 @@ from email.utils import formatdate, make_msgid
 from .config import STATE_DIR, Config
 
 DRAFT_DIR = STATE_DIR / "drafts"
+GONE_FILE = STATE_DIR / "drafts-gone.json"     # {message_id: gmail_msgid} still to delete from Gmail
 _live: dict[str, "Draft"] = {}     # one object per draft, shared by the UI and the sync thread
 
 
@@ -137,8 +140,50 @@ def sync_to_gmail(cfg: Config, mbox, d: Draft) -> int:
     return new_id
 
 
-def remove_from_gmail(mbox, d: Draft):
-    mbox.delete_drafts(mbox.draft_versions(d.message_id) or ([d.gmail_msgid] if d.gmail_msgid else []))
+def _gone() -> dict[str, int]:
+    try:
+        return json.loads(GONE_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _set_gone(gone: dict[str, int]):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = GONE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(gone))
+    tmp.replace(GONE_FILE)
+
+
+def forget(d: Draft):
+    """Sent or discarded: delete it here now, and remember to delete it from Gmail (`purge`)."""
+    if d.message_id or d.gmail_msgid:
+        _set_gone({**_gone(), d.message_id or str(d.gmail_msgid): d.gmail_msgid})
+    delete(d)
+
+
+def purge(mbox) -> int:
+    """Delete every copy of the forgotten drafts from Gmail; returns how many were removed."""
+    gone, n = _gone(), 0
+    for message_id, msgid in gone.items():
+        ids = (mbox.draft_versions(message_id) if message_id.startswith("<") else []) or ([msgid] if msgid else [])
+        mbox.delete_drafts(ids)
+        n += len(ids)
+    if gone:
+        _set_gone({k: v for k, v in _gone().items() if k not in gone})   # keep ones forgotten meanwhile
+    return n
+
+
+def tidy(mbox) -> int:
+    """At start: finish interrupted deletions, and drop older Gmail copies of the drafts still
+    being written (left when the app closed mid-save). The newest copy always stays."""
+    n = purge(mbox)
+    for d in load_all():
+        versions = mbox.draft_versions(d.message_id)
+        keep = {max(versions, default=0), d.gmail_msgid}   # X-GM-MSGIDs only grow
+        old = [v for v in versions if v not in keep]
+        mbox.delete_drafts(old)
+        n += len(old)
+    return n
 
 
 def from_gmail(cfg: Config, m, parsed) -> Draft:
