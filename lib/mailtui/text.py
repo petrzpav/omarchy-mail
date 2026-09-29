@@ -93,6 +93,39 @@ def linkify(s: str):
     return t
 
 
+class Links:
+    """A renderable whose terminal hyperlinks can be walked with Tab: remembers the links
+    (and the line each starts on) from its last render and highlights the active one."""
+
+    def __init__(self, renderable):
+        self.renderable, self.active = renderable, None
+        self.links: list[tuple[str, int]] = []   # (href, line)
+
+    def __rich_measure__(self, console, options):
+        from rich.measure import Measurement
+        return Measurement.get(console, options, self.renderable)
+
+    def __rich_console__(self, console, options):
+        from rich.style import Style
+        from rich.segment import Segment
+        links, line, last, gap = [], 0, None, True
+        mark = Style(reverse=True)
+        for seg in console.render(self.renderable, options):
+            href = seg.style.link if seg.style and not seg.control else None
+            if href:
+                # One link may span several segments and lines; a new one starts after other text.
+                if gap or href != last:
+                    links.append((href, line))
+                last, gap = href, False
+                if self.active == len(links) - 1:
+                    seg = Segment(seg.text, seg.style + mark)
+            elif seg.text.strip():
+                gap = True
+            line += seg.text.count("\n")
+            yield seg
+        self.links = links
+
+
 def reflow(text: str) -> str:
     """Undo the sender's hard wrapping (~72-78 cols) so paragraphs fit our own column.
     Lists, quotes, signatures and short lines keep their line breaks."""

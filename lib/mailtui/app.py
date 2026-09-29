@@ -13,6 +13,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult, SystemCommand
+from textual.actions import SkipAction
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
@@ -36,6 +37,7 @@ KEY_HELP = [
     ("{goto}", "go to any folder: Starred, Sent, Bin, All Mail …"),
     ("Enter / Esc", "open conversation / go back"),
     ("↑ ↓  ·  Enter / Space", "in the reader: previous / next message  ·  expand / collapse it"),
+    ("Tab / Shift+Tab  ·  Enter", "in the reader: next / previous link  ·  open it"),
     ("Space  ·  {select_all}", "select for bulk actions  ·  select all"),
     ("{move}", "move to category"),
     ("{jev}", "ask Jev where it belongs"),
@@ -461,7 +463,8 @@ class Reader(VerticalScroll):
 
     BINDINGS = [Binding("up", "screen.message(-1)", show=False), Binding("down", "screen.message(1)", show=False),
                 Binding("pagedown", "jump('page_down')", show=False), Binding("pageup", "jump('page_up')", show=False),
-                Binding("home", "jump('home')", show=False), Binding("end", "jump('end')", show=False)]
+                Binding("home", "jump('home')", show=False), Binding("end", "jump('end')", show=False),
+                Binding("tab", "screen.link(1)", show=False), Binding("shift+tab", "screen.link(-1)", show=False)]
 
     def action_jump(self, where: str):
         {"page_down": self.scroll_page_down, "page_up": self.scroll_page_up,
@@ -491,6 +494,8 @@ class MainScreen(Screen):
         # Local changes Gmail may not reflect yet: msgid -> {"hide", "seen", "done"}.
         # A sync that started before the change reached Gmail must not undo it on screen.
         self.pending: dict[int, dict] = {}
+        self.draft_refs: set[str] = set()  # Message-IDs that a local draft replies to
+        self._link: tuple[Static, int] | None = None  # the link Tab walked to in the reader
 
     def compose(self) -> ComposeResult:
         yield TabBar(id="tabs")
@@ -508,7 +513,7 @@ class MainScreen(Screen):
         k = self.keys
         for key, action, desc, show in [
             ("left", "pane(-1)", "", False), ("right", "pane(1)", "", False),
-            ("escape", "back", "Back", False),
+            ("escape", "back", "Back", False), ("enter", "open_link", "", False),
             (k["goto"], "goto", "Go to", True),
             (k["drafts"], "drafts", "Drafts", False),
             (k["select"], "select", "Select", False), (k["select_all"], "select_all", "Select all", False),
@@ -524,7 +529,7 @@ class MainScreen(Screen):
             (k["refresh"], "refresh", "Refresh", False), (k["help"], "help", "Help", True),
         ]:
             self._bindings.bind(key, action, desc, show=show,
-                                priority=key in ("left", "right", "space", "escape", "delete"))
+                                priority=key in ("left", "right", "space", "escape", "delete", "enter"))
         self.refresh_bindings()
         t = self.query_one(Messages)
         # Date and subject lead; who it's from and its label follow. No header row, no chrome.
@@ -621,11 +626,23 @@ class MainScreen(Screen):
         self.query_one(Messages).display = not reading
         self.query_one(Reader).display = reading
         if reading:
-            k = {n: pretty(v) for n, v in self.keys.items()}
-            self.query_one("#readhint", Static).update(
-                f"Esc back   ↑↓ messages   Enter open   {k['reply']} reply   "
-                f"{k['archive']} archive   {k['star']} star   {k['move']} move   Del delete")
+            self._paint_readhint()
         self.call_after_refresh(self.fit_columns)
+
+    def _paint_readhint(self):
+        hint = self.query_one("#readhint", Static)
+        if self._link:
+            links = self._links()
+            i = next((n for n, l in enumerate(links) if l[:2] == self._link), 0)
+            t = Text(f"{i + 1}/{len(links)}  ", style="dim")
+            t.append(links[i][2] if links else "", style=text.LINK_STYLE)
+            t.append("   Enter open   Tab next   Esc done", style="dim")
+            t.no_wrap, t.overflow = True, "ellipsis"
+            hint.update(t)
+            return
+        k = {n: pretty(v) for n, v in self.keys.items()}
+        hint.update(f"Esc back   ↑↓ messages   Enter open   Tab links   {k['reply']} reply   "
+                    f"{k['archive']} archive   {k['star']} star   {k['move']} move   Del delete")
 
     def on_descendant_focus(self, event):
         self._show_panes()
@@ -844,9 +861,13 @@ class MainScreen(Screen):
         here = self.view.label if self.view and not self.search_query else None
         cats = [k.name for k in self.cfg.categories if k.name in c.labels and k.name != here]
         cat = cats[0] if cats else ""
+        subject = Text(c.subject, style="bold" if unread else "", overflow="ellipsis", no_wrap=True)
+        if self.has_draft(c):
+            subject = Text.assemble(("✎ ", "bold"), c.subject, style=f"{'bold ' if unread else ''}yellow",
+                                    overflow="ellipsis", no_wrap=True)
         return (mark,
                 Text(short_date(c.date), style="bold" if unread else "dim"),
-                Text(c.subject, style="bold" if unread else "", overflow="ellipsis", no_wrap=True),
+                subject,
                 Text(c.sender, style="" if unread else "dim", overflow="ellipsis", no_wrap=True),
                 Text(cat[:9], style=self._cat_color(cat), overflow="ellipsis", no_wrap=True))
 
@@ -984,6 +1005,7 @@ class MainScreen(Screen):
         box = self.query_one("#thread", Vertical)
         self.current = c
         self._gen = getattr(self, "_gen", 0) + 1
+        self._link = None
         self.thread_msgs = list(msgs or [])
         box.remove_children()
         if not c:
@@ -1073,12 +1095,12 @@ class MainScreen(Screen):
                                             f"{len(p.get_payload(decode=True) or b'') // 1024} kB", id=str(i))
                                      for i, p in enumerate(parts)], classes="attachments"))
         if is_md and main:
-            body = Markdown(main, hyperlinks=False)
+            body = text.Links(Markdown(main))
         else:
-            body = text.linkify(text.reflow(main)) if main else "(empty)"
+            body = text.Links(text.linkify(text.reflow(main))) if main else "(empty)"
         kids.append(Static(body, markup=False, classes="body"))
         if quoted:
-            kids.append(Collapsible(Static(text.linkify(quoted), markup=False, classes="history"),
+            kids.append(Collapsible(Static(text.Links(text.linkify(quoted)), markup=False, classes="history"),
                                     title="··· earlier messages", collapsed=True, classes="quoted",
                                     collapsed_symbol=" ", expanded_symbol=" "))
         dot = "•" if not m.seen else " "
@@ -1145,6 +1167,67 @@ class MainScreen(Screen):
             w.collapsed = not w.collapsed
             w.scroll_visible(animate=False)
 
+    # -- reader: links
+
+    def _links(self) -> list[tuple[Static, int, str]]:
+        """Links on screen in the reader, in reading order: (widget, index in it, href)."""
+        out = []
+        for w in self._message_widgets():
+            for s in w.query(".body, .history"):
+                if isinstance(s.content, text.Links) and not any(
+                        isinstance(a, Collapsible) and a.collapsed for a in s.ancestors):
+                    out += [(s, i, href) for i, (href, _) in enumerate(s.content.links)]
+        return out
+
+    def _set_link(self, link: tuple[Static, int] | None):
+        old, self._link = self._link, link
+        for s, i in filter(None, (old, link)):
+            s.content.active = i if (s, i) == link else None
+            s.update(s.content, layout=False)   # drop Textual's cached render
+        self._paint_readhint()
+
+    def action_link(self, step: int):
+        """Tab / Shift+Tab in the reader: walk the links of the open messages."""
+        links = self._links()
+        if not links:
+            self.notify("No links here", timeout=2)
+            return
+        keys = [l[:2] for l in links]
+        if self._link in keys:
+            n = (keys.index(self._link) + step) % len(links)
+        else:   # start from the focused message
+            m = self.focused_message()
+            ws = self._message_widgets()
+            owner = [next(w for w in ws if s in w.walk_children()) for s, _, _ in links]
+            order = [w.msg.msgid for w in ws]
+            at = order.index(m.msgid) if m and m.msgid in order else 0
+            after = [n for n, w in enumerate(owner) if order.index(w.msg.msgid) >= at]
+            before = [n for n, w in enumerate(owner) if order.index(w.msg.msgid) <= at]
+            n = (after[0] if after else 0) if step > 0 else (before[-1] if before else len(links) - 1)
+        s, i, _ = links[n]
+        self._set_link((s, i))
+        reader = self.query_one(Reader)
+        y = s.content_region.y + s.content.links[i][1]
+        if not reader.region.y <= y < reader.region.bottom - 1:
+            reader.scroll_to(y=reader.scroll_y + y - reader.region.y - reader.region.height // 3,
+                             animate=False)
+
+    def action_open_link(self):
+        if self.focused_pane() != "reader" or not self._link:
+            raise SkipAction()
+        s, i = self._link
+        href = s.content.links[i][0]
+        if href.startswith("mailto:"):
+            u = urlparse(href)
+            q = parse_qs(u.query)
+            ident = self.cfg.identities[0].email if self.cfg.identities else self.cfg.email
+            self.open_compose(ident=ident, to=unquote(u.path), cc=",".join(q.get("cc", [])),
+                              subject=q.get("subject", [""])[0], body=q.get("body", [""])[0])
+            return
+        subprocess.Popen(["xdg-open", href], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        self.notify(f"Opened {href[:60]}", timeout=2)
+
     @on(OptionList.OptionSelected, ".attachments")
     def _open_attachment(self, event: OptionList.OptionSelected):
         col = next(a for a in event.option_list.ancestors if isinstance(a, Collapsible))
@@ -1168,7 +1251,9 @@ class MainScreen(Screen):
         self.action_tab(step)
 
     def action_back(self):
-        if self.focused_pane() == "reader":
+        if self.focused_pane() == "reader" and self._link:
+            self._set_link(None)
+        elif self.focused_pane() == "reader":
             self.focus_pane("list")
         elif self.selected:
             self.selected.clear()
@@ -1441,8 +1526,18 @@ class MainScreen(Screen):
 
     # -- drafts bar
 
+    def has_draft(self, c: Conv) -> bool:
+        return any(m.message_id and m.message_id in self.draft_refs for m in c.msgs)
+
     def paint_drafts(self):
         ds = drafts.load_all()
+        refs = {r for d in ds for k in ("In-Reply-To", "References") for r in d.headers.get(k, "").split()}
+        if refs != self.draft_refs:
+            before = {c.msgid for c in self.msgs if self.has_draft(c)}
+            self.draft_refs = refs
+            for c in self.msgs:
+                if (c.msgid in before) != self.has_draft(c):
+                    self.redraw_row(c)
         bar = self.query_one("#draftbar", Static)
         bar.display = bool(ds)
         if ds:
