@@ -10,11 +10,13 @@ action and actions reach Gmail in the order they were made.
 
 import hashlib
 import json
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime
+from email.utils import getaddresses
 from pathlib import Path
 
 from .config import CACHE_DIR, STATE_DIR, Config
@@ -23,6 +25,7 @@ from .imap import Folder, Mailbox, Msg
 STATE_LOG = STATE_DIR / "errors.log"
 BODY_LIMIT = 600_000      # don't prefetch bodies bigger than this
 BODY_KEEP = 3000          # bodies kept on disk
+ROBOT = re.compile(r"no-?reply|do-?not-?reply|unsubscribe|mailer-daemon|bounce|^notifications?@", re.I)
 
 
 def msg_to_dict(m: Msg) -> dict:
@@ -138,6 +141,49 @@ class Store:
             self.save_thread(t, [m for m in msgs if m.thrid == t])
         every = [m for t in thrids if t for m in (self.cached_thread(t) or [])]
         return self.prefetch(every[-limit_bodies:]) if every else 0
+
+    # -- address book, from the cached message lists
+
+    def contacts(self) -> list[tuple[str, str]]:
+        """(name, address) of everyone in the cached mail, people I wrote to first, then by
+        how often and how recently they appear. Rebuilt at most once a minute."""
+        if time.time() - getattr(self, "_contacts_at", 0) < 60:
+            return self._contacts
+        me = {i.email.lower() for i in self.cfg.identities} | {self.cfg.email.lower()}
+        score: dict[str, float] = {}
+        names: dict[str, tuple[str, str]] = {}       # addr -> (date, name) of the latest mention
+        seen: set[int] = set()
+
+        def add(name, addr, weight, date):
+            addr = addr.strip().lower()
+            if not addr or "@" not in addr or addr in me or ROBOT.search(addr):
+                return
+            score[addr] = score.get(addr, 0) + weight
+            if name and name != addr and date >= names.get(addr, ("", ""))[0]:
+                names[addr] = (date, name.strip().strip('"'))
+            elif addr not in names:
+                names[addr] = ("", "")
+        for path in (self.dir / "lists").glob("*.json"):
+            try:
+                msgs = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            for m in msgs:
+                if m.get("msgid") in seen:
+                    continue
+                seen.add(m.get("msgid"))
+                date = m.get("date") or ""
+                if (m.get("sender_addr") or "").lower() in me:
+                    for n, a in getaddresses([m.get("to") or "", m.get("cc") or ""]):
+                        add(n, a, 5, date)
+                else:
+                    add(m.get("sender") or "", m.get("sender_addr") or "", 1, date)
+                    for n, a in getaddresses([m.get("cc") or ""]):
+                        add(n, a, 0.5, date)
+        order = sorted(score, key=lambda a: (score[a], names[a][0]), reverse=True)
+        self._contacts = [(names[a][1], a) for a in order]
+        self._contacts_at = time.time()
+        return self._contacts
 
     # -- bodies cache
 

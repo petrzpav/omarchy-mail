@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import time
+import unicodedata
 from datetime import datetime
 from email.message import EmailMessage
 from email.headerregistry import Address
@@ -50,6 +51,7 @@ KEY_HELP = [
     ("{search}", "search, Gmail syntax: from:jan has:attachment"),
     ("{new}  ·  {reply}  ·  {reply_all}  ·  {forward}", "new · reply · reply all · forward"),
     ("{send}  ·  Esc  ·  {discard}", "compose: send · minimize to a draft · discard"),
+    ("{sender}  ·  ↑↓ Enter", "compose: choose the From address · pick a suggested To/Cc address"),
     ("{drafts}", "continue a draft (saved automatically, also in Gmail's Drafts)"),
     ("{add_category}  ·  {rename_category}", "add category · rename the current one"),
     ("{refresh}", "refresh"),
@@ -196,6 +198,68 @@ def quote_context(quote: str) -> tuple[str, str]:
     return head or "Earlier message", said
 
 
+def fold(s: str) -> str:
+    """Lowercase without diacritics, so "zelez" finds "Želez"."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s.lower()) if not unicodedata.combining(c))
+
+
+class AddressInput(Input):
+    """A To/Cc field that suggests addresses from the mail seen so far, for the part after the
+    last comma. ↑↓ pick a suggestion, Enter or Tab takes it, Esc closes the list."""
+
+    def __init__(self, contacts, **kw):
+        super().__init__(**kw)
+        self.contacts = contacts            # callable -> [(name, addr)]
+        self.list: OptionList | None = None
+        self._matches: list[tuple[str, str]] = []
+
+    def suggest(self):
+        head, sep, token = self.value.rpartition(",")
+        token = fold(token.strip())
+        if not token or self.cursor_position < len(self.value):
+            return self.close_list()
+        taken = {a.lower() for _, a in getaddresses([head])}
+        words = token.split()
+        self._matches = [(n, a) for n, a in self.contacts() if a not in taken
+                         and all(w in fold(f"{n} {a}") for w in words)][:6]
+        if not self._matches:
+            return self.close_list()
+        self.list.set_options([Option(formataddr((n, a)) if n else a) for n, a in self._matches])
+        self.list.highlighted = 0
+        self.list.display = True
+
+    def close_list(self):
+        if self.list:
+            self.list.display = False
+
+    def take(self, index: int):
+        name, addr = self._matches[index]
+        head = self.value.rpartition(",")[0].strip()
+        self.value = (head + ", " if head else "") + formataddr((name, addr)) + ", "
+        self.cursor_position = len(self.value)
+        self.close_list()
+
+    async def _on_key(self, event):
+        if self.list and self.list.display:
+            ol = self.list
+            if event.key in ("down", "up"):
+                ol.highlighted = ((ol.highlighted or 0) + (1 if event.key == "down" else -1)) % ol.option_count
+            elif event.key in ("enter", "tab"):
+                self.take(ol.highlighted or 0)
+            elif event.key == "escape":
+                self.close_list()
+            else:
+                return await super()._on_key(event)
+            event.stop()
+            event.prevent_default()
+            return
+        await super()._on_key(event)
+
+    def _on_blur(self, event):
+        self.close_list()
+        super()._on_blur(event)
+
+
 class Compose(ModalScreen[str]):
     """Writing a message. Saved as you type (locally at once, to Gmail's Drafts every few
     seconds); Esc tucks it away as a draft, Alt+D throws it away, Ctrl+S sends.
@@ -214,10 +278,12 @@ class Compose(ModalScreen[str]):
         self._ready = False
         self._bindings.bind(keys["send"], "send", description="Send", priority=True)
         self._bindings.bind(keys["discard"], "discard", description="Discard", priority=True)
+        self._bindings.bind(keys["sender"], "sender", description="From", priority=True)
 
     def compose(self) -> ComposeResult:
         d = self.draft
-        idents = [(formataddr((i.name, i.email)), i.email) for i in self.cfg.identities] or \
+        # Identities with send_as can't be sent from; they reply as their target instead.
+        idents = [(formataddr((i.name, i.email)), i.email) for i in self.cfg.identities if not i.send_as] or \
                  [(self.cfg.email, self.cfg.email)]
         if d.ident not in [v for _, v in idents]:
             idents.append((d.ident, d.ident))
@@ -225,15 +291,21 @@ class Compose(ModalScreen[str]):
         with Vertical(classes="compose"):
             yield Label(d.subject if reply and d.subject else "New message", classes="dialog-title",
                         markup=False)
-            with Horizontal(classes="row", id="from-row") as row:
-                row.display = len(idents) > 1
-                yield Label("From", classes="field")
-                yield Select(idents, value=d.ident, allow_blank=False, id="from", compact=True)
             for fid, label, value in (("to", "To", d.to), ("cc", "Cc", d.cc), ("subject", "Subject", d.subject)):
                 with Horizontal(classes="row") as row:
                     row.display = not (reply and fid == "subject")    # the title says it
                     yield Label(label, classes="field")
-                    yield Input(value=value, id=fid, compact=True)
+                    if fid == "subject":
+                        yield Input(value=value, id=fid, compact=True)
+                    else:
+                        yield AddressInput(self.store.contacts, value=value, id=fid, compact=True)
+                if fid != "subject":
+                    yield OptionList(id=f"{fid}-suggest", classes="suggest")
+            # After the recipients, so Tab from To/Cc/Subject reaches it before the body.
+            with Horizontal(classes="row", id="from-row") as row:
+                row.display = len(idents) > 1
+                yield Label("From", classes="field")
+                yield Select(idents, value=d.ident, allow_blank=False, id="from", compact=True)
             if d.attachments:
                 yield Static("📎 " + ", ".join(a["filename"] for a in d.attachments), classes="note")
             yield TextArea(d.body, id="body", soft_wrap=True, show_line_numbers=False, compact=True)
@@ -246,10 +318,15 @@ class Compose(ModalScreen[str]):
 
     def _hint(self, status: str = "") -> str:
         k = {n: pretty(v) for n, v in self.keys.items()}
-        return (f"{k['send']} send  ·  Esc minimize  ·  {k['discard']} discard  ·  Tab next field"
+        return (f"{k['send']} send  ·  Esc minimize  ·  {k['discard']} discard  ·  {k['sender']} from"
+                "  ·  Tab next field"
                 + (f"  ·  {status}" if status else ""))
 
     def on_mount(self):
+        for fid in ("to", "cc"):
+            field = self.query_one(f"#{fid}", AddressInput)
+            field.list = self.query_one(f"#{fid}-suggest", OptionList)
+            field.list.display = False
         self.query_one("#to" if not self.draft.to else "#body").focus()
         if self.draft.to:
             self.query_one("#body", TextArea).move_cursor((0, 0))
@@ -264,6 +341,23 @@ class Compose(ModalScreen[str]):
         d.cc = self.query_one("#cc", Input).value.strip()
         d.subject = self.query_one("#subject", Input).value
         d.body = self.query_one("#body", TextArea).text
+
+    def action_sender(self):
+        sel = self.query_one("#from", Select)
+        if sel.parent.display:
+            sel.focus()
+            sel.action_show_overlay()
+
+    @on(OptionList.OptionSelected, ".suggest")
+    def _suggestion_clicked(self, event: OptionList.OptionSelected):
+        field = self.query_one("#" + event.option_list.id.removesuffix("-suggest"), AddressInput)
+        field.take(event.option_index)
+        field.focus()
+
+    @on(Input.Changed, "AddressInput")
+    def _suggest(self, event: Input.Changed):
+        if event.input.has_focus:
+            event.input.suggest()
 
     @on(Input.Changed)
     @on(TextArea.Changed)
@@ -1790,6 +1884,12 @@ class MailApp(App):
     .compose .field { width: 9; color: $text-muted; }
     .compose Input, .compose Select { width: 1fr; background: $surface; }
     .compose Input:focus { background: $boost; }
+    .compose Select.-textual-compact:focus > SelectCurrent { background: ansi_blue; color: ansi_black; }
+    .compose Select.-textual-compact:focus > SelectCurrent Static#label { color: ansi_black; }
+    .compose SelectOverlay { background: $panel; border: round $accent; }
+    .compose .suggest { height: auto; max-height: 8; margin-left: 9; border: round $accent;
+                        background: $panel; }
+    .compose .suggest > .option-list--option-highlighted { background: ansi_blue; color: ansi_black; }
     .compose TextArea { height: 1fr; margin-top: 1; padding: 1 0 0 0; background: $surface;
                         border-top: hkey ansi_bright_black; }
     .compose .context-head { color: $text-muted; margin-top: 1; text-wrap: nowrap; text-overflow: ellipsis; }

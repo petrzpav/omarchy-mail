@@ -26,7 +26,8 @@ Dependencies (Textual, httpx, html2text) are installed by `uv` on first run into
 | `mail cat ls\|add\|rm\|rename` | manage categories (creates/renames Gmail labels) |
 | `mail unread` | inbox unread count |
 
-Replies are sent from the address the message was sent to. Sending goes through Gmail SMTP,
+Replies are sent from the address the message was sent to. In compose, `Alt+S` picks another From address;
+To and Cc suggest people from your mail as you type (↑↓, Enter or Tab to take one). Sending goes through Gmail SMTP,
 which only accepts From addresses verified as "Send mail as" in Gmail settings. For any other
 address, give that identity `smtp = "host:port"` in config.toml and put its password in secrets
 as `SMTP_PASSWORD_<ADDRESS_IN_CAPS_WITH_UNDERSCORES>`.

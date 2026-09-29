@@ -34,6 +34,7 @@ DEFAULT_KEYS = {
     "send": "ctrl+s",
     "drafts": "ctrl+o",
     "discard": "alt+d",
+    "sender": "alt+s",
 }
 
 
