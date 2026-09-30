@@ -1975,7 +1975,7 @@ class MailApp(App):
     .dialog-title { text-style: bold; padding-bottom: 1; }
     .note { color: $text-muted; padding-top: 1; }
     ModalScreen { align: center middle; }
-    .compose { width: 136; max-width: 98%; height: 90%; border: round $accent; background: $surface;
+    .compose { width: 100%; height: 100%; border: round $accent; background: $surface;
                padding: 1 2; }
     .compose .row { height: 1; }
     .compose .field { width: 9; color: $text-muted; }
