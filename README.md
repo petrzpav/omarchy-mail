@@ -58,6 +58,36 @@ systemctl --user enable --now mail-sort.timer
 
 Update later with `omarchy plugin update petrzpav.mail`.
 
+`install.sh` never replaces a file it didn't create: if you already have a `mail` command in
+`~/.local/bin` or a `mail.desktop`, it skips it and says so. An existing config is never touched.
+
+## Uninstall
+
+```
+~/.config/omarchy/plugins/petrzpav.mail/install.sh --remove
+omarchy plugin remove petrzpav.mail
+```
+
+The first line stops the timer and removes the commands, the `mailto:` handler and the unit links
+the installer made. Your config and cache stay; delete them too if you want everything gone:
+
+```
+rm -rf ~/.config/petrzpav-mail ~/.cache/petrzpav-mail ~/.local/state/petrzpav-mail
+```
+
+Your mail itself lives in Gmail: nothing is deleted there, and the labels stay as they are.
+
+## Dependencies and privacy
+
+- **uv**, which installs Python 3.12+ and Textual, httpx and html2text into
+  `~/.local/share/petrzpav-mail/venv` on first run.
+- **Gmail** over IMAP and SMTP (`imap.gmail.com`, `smtp.gmail.com`), signed in with your app
+  password. Mail is cached locally in `~/.cache/petrzpav-mail`.
+- **Jev** at `api.typesafe.ai`. To sort or review, the client sends Jev the message in question:
+  sender, recipient, subject and the start of the body (and, for a review, your draft and the
+  message you're replying to). Without `TYPESAFE_API_KEY` everything else works; Jev just says the key is missing.
+- No telemetry, no sudo, no system services: the optional sort timer is a systemd *user* unit.
+
 ## Try the demo
 
 Just want to see Jev work, without connecting Gmail? The demo runs the real client on a made-up
