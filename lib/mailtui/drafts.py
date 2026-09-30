@@ -30,7 +30,7 @@ class Draft:
     cc: str = ""
     subject: str = ""
     body: str = ""                                    # what I write
-    quote: str = ""                                   # the message replied to, sent below the body
+    quote: str = ""                                   # the message replied to or forwarded, sent below the body
     headers: dict = field(default_factory=dict)       # In-Reply-To / References of a reply
     attachments: list = field(default_factory=list)   # [{"path", "filename", "ctype"}]
     message_id: str = ""
@@ -46,6 +46,16 @@ class Draft:
 
     def snapshot(self) -> list:
         return [self.to, self.cc, self.subject, self.body.strip()]
+
+    @property
+    def forward(self) -> bool:
+        from .text import FORWARD_HEAD
+        return self.quote.startswith(FORWARD_HEAD)
+
+    @property
+    def reply(self) -> bool:
+        """Answers the quoted message (a forward only passes it on)."""
+        return bool(self.quote) and not self.forward
 
     @property
     def untouched(self) -> bool:
@@ -119,7 +129,7 @@ def build(cfg: Config, d: Draft) -> EmailMessage:
     for k, v in d.headers.items():
         if v:
             msg[k] = v
-    msg.set_content(d.body.rstrip() + ("\n\n" + d.quote if d.quote else "") + "\n")
+    msg.set_content("\n\n".join(x for x in (d.body.rstrip(), d.quote) if x) + "\n")
     for a in d.attachments:
         try:
             data = open(a["path"], "rb").read()
@@ -194,6 +204,8 @@ def from_gmail(cfg: Config, m, parsed) -> Draft:
     body, quote = text.body_text(parsed), ""
     if parsed.get("In-Reply-To"):
         body, quote = text.split_quoted(body)
+    elif (at := body.find(text.FORWARD_HEAD)) >= 0:
+        body, quote = body[:at].rstrip(), body[at:].strip()
     d = new(ident, to=to, cc=str(parsed.get("Cc") or ""), subject=str(parsed.get("Subject") or ""),
             body=body, quote=quote, headers={k: str(parsed.get(k)) for k in ("In-Reply-To", "References") if parsed.get(k)},
             attach_parts=text.attachments(parsed), message_id=str(parsed.get("Message-ID") or ""),

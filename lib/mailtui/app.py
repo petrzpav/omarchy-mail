@@ -187,7 +187,12 @@ class Help(ModalScreen):
 
 
 def quote_context(quote: str) -> tuple[str, str]:
-    """A reply's quote as (who wrote it when, just what they said), to read while writing."""
+    """A reply's quote or a forwarded message as (who wrote it when, just what they said)."""
+    if quote.startswith(text.FORWARD_HEAD):
+        fields, _, said = quote.partition("\n\n")
+        f = dict(l.split(": ", 1) for l in fields.splitlines()[1:] if ": " in l)
+        who = re.sub(r"\s*<[^>]*>$", "", f.get("From", "")) or "Forwarded message"
+        return "  ·  ".join(x for x in (who, f.get("Date", "")) if x), text.reflow(said.strip())
     head, _, rest = quote.partition("\n")
     if not head.rstrip().endswith(":"):
         head, rest = "", quote
@@ -295,8 +300,8 @@ class Compose(ModalScreen[str]):
             idents.append((d.ident, d.ident))
         reply = bool(d.headers.get("In-Reply-To"))
         with Vertical(classes="compose"):
-            yield Label(d.subject if reply and d.subject else "New message", classes="dialog-title",
-                        markup=False)
+            yield Label(d.subject if reply and d.subject else "Forward" if d.forward else "New message",
+                        classes="dialog-title", markup=False)
             with Horizontal(id="compose-main"):
                 with Vertical(id="compose-left"):
                     for fid, label, value in (("to", "To", d.to), ("cc", "Cc", d.cc), ("subject", "Subject", d.subject)):
@@ -319,7 +324,7 @@ class Compose(ModalScreen[str]):
                     yield TextArea(d.body, id="body", soft_wrap=True, show_line_numbers=False, compact=True)
                     if d.quote:
                         head, said = quote_context(d.quote)
-                        yield Static("↩ " + head, classes="context-head", markup=False)
+                        yield Static(("↪ " if d.forward else "↩ ") + head, classes="context-head", markup=False)
                         with VerticalScroll(id="context", can_focus=False):
                             yield Static(said, markup=False)
                 # Jev's review, always open beside the text.
@@ -420,7 +425,7 @@ class Compose(ModalScreen[str]):
             return
         self.query_one("#review-status", Static).update(Text("reading…", style="dim"))
         self._review(body, self.query_one("#subject", Input).value,
-                     quote_context(self.draft.quote)[1] if self.draft.quote else "")
+                     quote_context(self.draft.quote)[1] if self.draft.reply else "")
 
     @work(thread=True, exclusive=True, group="review")
     def _review(self, body: str, subject: str, original: str):
@@ -432,7 +437,7 @@ class Compose(ModalScreen[str]):
             self.app.call_from_thread(self._show_review, body, grades)
 
     def _criteria(self) -> list[str]:
-        return [c.name for c in self.cfg.review or jev.CRITERIA if self.draft.quote or not c.reply_only]
+        return [c.name for c in self.cfg.review or jev.CRITERIA if self.draft.reply or not c.reply_only]
 
     def _review_text(self, review: "jev.Review | None") -> Text:
         """The sidebar: a bar per criterion (empty before the first review), then what's unanswered."""
@@ -440,7 +445,7 @@ class Compose(ModalScreen[str]):
         out.append("Jev\n\n", style="bold")
         names = self._criteria()
         width = max(map(len, names + ["answered"])) + 2
-        if self.draft.quote:
+        if self.draft.reply:
             out.append("answered".ljust(width))
             if review and review.asked:
                 ok = review.asked - len(review.missed)
@@ -844,7 +849,7 @@ class MainScreen(Screen):
             hint.update(t)
             return
         k = {n: pretty(v) for n, v in self.keys.items()}
-        hint.update(f"Esc back   ↑↓ messages   Enter open   Tab links   {k['reply']} reply   "
+        hint.update(f"Esc back   ↑↓ messages   Enter open   Tab links   {k['reply']} reply   {k['forward']} forward   "
                     f"{k['archive']} archive   {k['star']} star   {k['move']} move   Del delete")
 
     def on_descendant_focus(self, event):
@@ -1819,9 +1824,9 @@ class MainScreen(Screen):
             if forward:
                 if not subj.lower().startswith(("fwd:", "fw:")):
                     subj = "Fwd: " + subj
-                fwd = (f"\n\n---------- Forwarded message ---------\nFrom: {m.sender} <{m.sender_addr}>\n"
-                       f"Date: {when}\nSubject: {m.subject}\nTo: {m.to}\n\n{body}")
-                self.open_compose(ident=ident.email, subject=subj, body=fwd, attach=text.attachments(parsed))
+                fwd = (f"{text.FORWARD_HEAD}\nFrom: {m.sender} <{m.sender_addr}>\nDate: {when}\n"
+                       f"Subject: {m.subject}\nTo: {m.to}\n" + (f"Cc: {m.cc}\n" if m.cc else "") + f"\n{body}")
+                self.open_compose(ident=ident.email, subject=subj, quote=fwd, attach=text.attachments(parsed))
                 return
             if not subj.lower().startswith("re:"):
                 subj = "Re: " + subj

@@ -170,5 +170,8 @@ def attachments(msg: EmailMessage) -> list[EmailMessage]:
         return []
 
 
+FORWARD_HEAD = "---------- Forwarded message ---------"   # what Gmail writes above a forward
+
+
 def quote(text: str) -> str:
     return "\n".join("> " + line if line else ">" for line in text.splitlines())
