@@ -1,0 +1,52 @@
+# Demo categories. keep_in_inbox: Jev labels the mail and leaves it in the Inbox,
+# so every decision stays on screen.
+
+[[category]]
+name = "Clients"
+description = "Mail written by clients and business contacts about projects, quotes, contracts and invoices they ask for"
+keep_in_inbox = true
+
+[[category]]
+name = "Team"
+description = "Mail written by colleagues at Northwind Studio (northwind.example): notes, plans, internal discussion"
+keep_in_inbox = true
+
+[[category]]
+name = "Leads"
+description = "New business inquiries from people who want a website, often through the studio's contact form"
+keep_in_inbox = true
+
+[[category]]
+name = "Dev"
+description = "Developer tooling notifications: GitHub, CI runs, deploys, servers and hosting service notices"
+keep_in_inbox = true
+
+[[category]]
+name = "Finance"
+description = "Money: invoices, receipts, bank statements, payments"
+keep_in_inbox = true
+
+[[category]]
+name = "Accounts"
+description = "Sign-in codes, password resets, new-device and security alerts from online accounts"
+keep_in_inbox = true
+
+[[category]]
+name = "Collab"
+description = "Notifications from collaboration tools: task boards, comments, mentions, shared documents"
+keep_in_inbox = true
+
+[[category]]
+name = "Travel"
+description = "Flights, trains, hotels and other travel bookings"
+keep_in_inbox = true
+
+[[category]]
+name = "Shopping"
+description = "Online orders, deliveries and parcels"
+keep_in_inbox = true
+
+[[category]]
+name = "News"
+description = "Newsletters, marketing, promotions and other bulk mail"
+keep_in_inbox = true

@@ -1,0 +1,10 @@
+#!/bin/bash
+#
+# mail-demo - the mail client on a made-up inbox, with real Jev.
+#
+#   mail-demo              try it in this terminal (nothing touches Gmail)
+#   mail-demo record       render out/jev-demo.mp4 headless
+
+root=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
+export UV_PROJECT_ENVIRONMENT="${XDG_DATA_HOME:-$HOME/.local/share}/petrzpav-mail/venv"
+exec uv run --quiet --project "$root" python "$root/demo/demo.py" "$@"

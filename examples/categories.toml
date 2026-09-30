@@ -1,0 +1,38 @@
+# Categories = Gmail labels. `description` is what Jev reads when deciding.
+# auto = false keeps Jev from auto-filing into it (Ctrl+J still suggests it).
+# keep_in_inbox = true: Jev only adds the label, the mail stays in the Inbox.
+# Managed by `mail cat add|rm|rename` and the client (Insert, F2); hand edits are fine too.
+
+[[category]]
+name = "Work"
+description = "Mail written by clients, colleagues and business contacts: projects, quotes, contracts"
+keep_in_inbox = true
+
+[[category]]
+name = "Dev"
+description = "Developer tooling notifications: GitHub, CI runs, deploys, servers and hosting notices"
+
+[[category]]
+name = "Finance"
+description = "Money: invoices, receipts, bank and card statements, payments"
+keep_in_inbox = true
+
+[[category]]
+name = "Accounts"
+description = "Sign-in codes, password resets, new-device and security alerts from online accounts"
+
+[[category]]
+name = "Collab"
+description = "Notifications from collaboration tools: task boards, comments, mentions, shared documents, calendar invitations"
+
+[[category]]
+name = "Travel"
+description = "Flights, trains, hotels and other travel bookings"
+
+[[category]]
+name = "Shopping"
+description = "Online orders, deliveries and parcels"
+
+[[category]]
+name = "News"
+description = "Newsletters, marketing, promotions and other bulk mail"

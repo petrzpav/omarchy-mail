@@ -1,0 +1,51 @@
+# Mail configuration: ~/.config/petrzpav-mail/config.toml. Secrets live in ./secrets (chmod 600).
+
+[account]
+email = "you@gmail.com"            # the Gmail account (IMAP must be on, sign-in with an app password)
+imap_host = "imap.gmail.com"
+smtp_host = "smtp.gmail.com"
+
+[jev]
+model = "jev-latest"
+# Auto-sort moves a message only when Jev is at least this confident.
+threshold = 0.85
+# review_auto = false            # grade replies only on Alt+J, not whenever typing pauses
+
+# Addresses you receive mail on. Replies are sent from the one the message was addressed to.
+# `badge` is the short tag shown in the message list. The first entry is the default for new mail.
+[[identity]]
+email = "you@gmail.com"
+name = "Your Name"
+badge = "G"
+
+# Another address Gmail collects for you, verified as "Send mail as" in Gmail settings:
+# [[identity]]
+# email = "you@yourcompany.com"
+# name = "Your Name"
+# badge = "CO"
+#
+# Not verified in Gmail? Send it through its own server, password in secrets as
+# SMTP_PASSWORD_YOU_YOURCOMPANY_COM:
+# smtp = "smtp.yourcompany.com:465"
+#
+# Or answer its mail from another identity:
+# send_as = "you@gmail.com"
+
+[keys]
+# Override any shortcut, e.g. move = "ctrl+l". F1 in the client lists them all.
+
+# Mail to one address judged by Jev: confident junk (>= bin_threshold) goes to the Bin,
+# confident important mail into the Inbox, anything unsure stays where Gmail put it.
+# [[rule]]
+# to = "old-address@example.com"
+# important = "Written by a real person: friends, family, clients, support cases"
+# junk = "Sent by an automated system: newsletters, marketing, notifications"
+# bin_threshold = 0.9
+
+# Your own reply criteria instead of the defaults (clear, tone, length, next step, language):
+# [[review]]
+# name = "friendly"
+# question = "Does the reply sound warm and personal"
+# good = "Warm and personal"
+# ok = "Polite but a bit stiff"
+# poor = "Cold or robotic"

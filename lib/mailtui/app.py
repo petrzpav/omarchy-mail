@@ -1706,7 +1706,7 @@ class MainScreen(Screen):
                 self.load_messages()
                 self.query_one(Messages).focus()
         self.app.push_screen(Ask("Search all mail", self.search_query or "",
-                                 "from:jan has:attachment newer_than:30d to:pavel@petrzela.eu"), got)
+                                 "from:jan has:attachment newer_than:30d to:me@example.com"), got)
 
     def jev_history(self):
         entries = ops.sort_history(40)

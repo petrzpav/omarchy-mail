@@ -2,7 +2,7 @@
 Type=Application
 Name=Mail
 Comment=Light terminal Gmail client with Jev sorting
-Exec=/home/petrzpav/.local/bin/mail-window compose %u
+Exec=mail-window compose %u
 Icon=mail-message-new
 Terminal=false
 MimeType=x-scheme-handler/mailto;

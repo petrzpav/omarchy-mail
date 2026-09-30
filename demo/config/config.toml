@@ -1,0 +1,13 @@
+# The demo account. Nothing here reaches Gmail: demo/fakegmail.py stands in for it.
+
+[account]
+email = "mia@northwind.example"
+
+[jev]
+model = "jev-latest"
+threshold = 0.8
+
+[[identity]]
+email = "mia@northwind.example"
+name = "Mia Hart"
+badge = "NW"
