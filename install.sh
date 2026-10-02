@@ -27,11 +27,14 @@ link() {
   ln -sfn "$1" "$target"
 }
 
+units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
 if [[ ${1:-} == --remove ]]; then
-  systemctl --user disable --now mail-sort.timer >/dev/null 2>&1 || true
+  if mine_link "$units/mail-sort.timer"; then
+    systemctl --user disable --now mail-sort.timer >/dev/null 2>&1 || true
+  fi
   for unit in mail-sort.timer mail-sort.service; do
-    f="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$unit"
-    mine_link "$f" && rm -f "$f"
+    mine_link "$units/$unit" && rm -f "$units/$unit"
   done
   systemctl --user daemon-reload >/dev/null 2>&1 || true
   for f in "$bin/mail" "$bin/mail-window"; do
@@ -60,7 +63,14 @@ if [[ ! -e $conf ]]; then
   echo "Created $conf: fill in config.toml and secrets."
 fi
 
-systemctl --user link "$root/systemd/mail-sort.service" "$root/systemd/mail-sort.timer" >/dev/null
+for unit in mail-sort.service mail-sort.timer; do
+  f="$units/$unit"
+  if [[ -e $f || -L $f ]] && ! mine_link "$f"; then
+    echo "skipped $f: it already exists and isn't from this plugin"
+  else
+    systemctl --user link "$root/systemd/$unit" >/dev/null
+  fi
+done
 
 cat <<MSG
 Installed. Next:
