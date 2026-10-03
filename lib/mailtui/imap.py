@@ -495,6 +495,18 @@ class Mailbox:
             return [Msg(folder=raw, uid=u, msgid=0) for u in uids]
         return self._run(go)
 
+    def by_msgid(self, msgids: list[int]) -> list[Msg]:
+        """Full headers of messages by X-GM-MSGID, from All Mail."""
+        found = self.find(msgids)
+        if not found:
+            return []
+        allmail = found[0].folder
+
+        def go(c):
+            self._select(c, allmail)
+            return self._fetch_headers(c, allmail, ",".join(str(m.uid) for m in found))
+        return self._run(go)
+
     def trash(self, msgs: list[Msg]):
         bin_raw = self.folder("trash").raw
         for folder, uids in _by_folder(msgs):

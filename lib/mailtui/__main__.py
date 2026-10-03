@@ -85,10 +85,14 @@ def main():
     k.add_argument("name", nargs="?")
     k.add_argument("description", nargs="?", help="description (add) or new name (rename)")
     k.add_argument("--delete-label", action="store_true", help="rm: also delete the Gmail label")
+    from . import tools
+    tools.add_parsers(sub)
     args = p.parse_args()
 
     cfg = config.load()
-    if args.cmd == "unread":
+    if getattr(args, "func", None):
+        args.func(cfg, args)
+    elif args.cmd == "unread":
         cmd_unread(cfg, args)
     elif args.cmd == "sort":
         cmd_sort(cfg, args)

@@ -138,6 +138,17 @@ Jev's review refreshes whenever you stop typing for a few seconds (`review_auto 
 `[jev]` turns that off) and on `Alt+J`. Your own criteria can replace the defaults: `[[review]]`
 entries with `name`, `question`, `good`, `ok`, `poor` (and `reply_only = true`).
 
+## Scripting and Claude Code
+
+Everything the client does also works from the shell, so scripts and AI agents can read and answer
+mail without the TUI: `mail folders`, `ls [FOLDER] [--unread]`, `search 'GMAIL QUERY'`, `show ID`,
+`attachments ID`, `archive|trash|move|label|mark-read|star … ID…`, `undo`, and
+`draft --reply|--reply-all|--forward ID` → `drafts --show` → `send` (a draft also lands in Gmail
+Drafts, so you can finish it on the phone). Lists take `--json`; see `mail -h`.
+
+`install.sh` links `skill/` into `~/.claude/skills/mail` when Claude Code is installed, so Claude
+knows these commands (and drafts first, sending only when you say so).
+
 ## License
 
 MIT

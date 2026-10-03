@@ -7,6 +7,7 @@
 #   mail unread [--cached]        print the inbox unread count
 #   mail sort [--dry-run]         let Jev sort new inbox mail into categories
 #   mail cat ls|add|rm|rename     manage categories (= Gmail labels)
+#   mail ls|search|show|draft|send|archive|move …   scriptable commands, see `mail -h`
 #
 # Config lives in ~/.config/petrzpav-mail (config.toml, categories.toml, secrets).
 
