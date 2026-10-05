@@ -12,6 +12,7 @@ from email.utils import formatdate, getaddresses, make_msgid
 from urllib.parse import parse_qs, unquote, urlparse
 
 from rich.markdown import Markdown
+from rich.table import Table
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult, SystemCommand
@@ -35,29 +36,43 @@ from .store import Store
 PENDING_GRACE = 30  # seconds a local change still wins over what a sync reports
 
 KEY_HELP = [
+    "Moving around",
     ("↑ ↓  PgUp PgDn  Home End", "move through the list"),
     ("← →", "previous / next tab (in the reader: back to the list)"),
     ("{goto}", "go to any folder: Starred, Sent, Bin, All Mail …"),
-    ("Enter / Esc", "open conversation / go back"),
-    ("↑ ↓  ·  Enter / Space", "in the reader: previous / next message  ·  expand / collapse it"),
-    ("Tab / Shift+Tab  ·  Enter", "in the reader: next / previous link  ·  open it"),
-    ("Space  ·  {select_all}", "select for bulk actions  ·  select all"),
+    ("Enter  ·  Esc", "open conversation  ·  go back"),
+    ("{search}", "search, Gmail syntax: from:jan has:attachment"),
+    ("{palette}", "command palette (every action, incl. Jev history)"),
+    "Reading",
+    ("↑ ↓", "previous / next message"),
+    ("Enter / Space", "expand / collapse the message"),
+    ("Tab / Shift+Tab  ·  Enter", "next / previous link  ·  open it"),
+    "Sorting",
+    ("{select}  ·  {select_all}", "select for bulk actions  ·  select all"),
     ("{move}", "move to category"),
     ("{jev}", "ask Jev where it belongs"),
     ("{archive}", "archive"),
     ("{trash}", "move to Bin (on a category: remove it)"),
-    ("{undo}", "undo last action"),
     ("{toggle_read}", "mark read / unread"),
     ("{star}", "star / unstar"),
-    ("{search}", "search, Gmail syntax: from:jan has:attachment"),
-    ("{new}  ·  {reply}  ·  {reply_all}  ·  {forward}", "new · reply · reply all · forward"),
-    ("{send}  ·  Esc  ·  {discard}", "compose: send · minimize to a draft · discard"),
-    ("{sender}  ·  ↑↓ Enter", "compose: choose the From address · pick a suggested To/Cc address"),
-    ("{review}", "compose: ask Jev how good the message is (also when typing pauses)"),
+    ("{undo}", "undo last action"),
+    "Writing",
+    ("{new}", "new message"),
+    ("{reply}", "reply"),
+    ("{reply_all}", "reply all"),
+    ("{forward}", "forward"),
     ("{drafts}", "continue a draft (saved automatically, also in Gmail's Drafts)"),
-    ("{add_category}  ·  {rename_category}", "add category · rename the current one"),
+    ("{send}", "compose: send"),
+    ("Esc", "compose: minimize to a draft"),
+    ("{discard}", "compose: discard"),
+    ("{sender}", "compose: choose the From address"),
+    ("↑ ↓  Enter", "compose: pick a suggested To / Cc address"),
+    ("{review}", "compose: ask Jev how good the message is (also when typing pauses)"),
+    "Categories",
+    ("{add_category}", "add category"),
+    ("{rename_category}", "rename the current one"),
+    "Other",
     ("{refresh}", "refresh"),
-    ("{palette}", "command palette (every action, incl. Jev history)"),
     ("{help}  ·  Ctrl+Q", "this help  ·  quit"),
 ]
 
@@ -175,15 +190,23 @@ class Help(ModalScreen):
         self.keys = {k: pretty(v) for k, v in keys.items()}
 
     def compose(self) -> ComposeResult:
-        t = Text()
-        for key, what in KEY_HELP:
-            t.append(f"{key.format(**self.keys):<34}", style="bold")
-            t.append(what + "\n")
-        with Vertical(classes="dialog wide"):
-            yield Label("Shortcuts", classes="dialog-title")
+        t = Table.grid(padding=(0, 2))
+        t.add_column(style="bold", no_wrap=True)
+        t.add_column()
+        for i, row in enumerate(KEY_HELP):
+            if isinstance(row, str):    # a section heading
+                t.add_row(Text(("\n" if i else "") + row, style="bold underline"), "")
+            else:
+                t.add_row(row[0].format(**self.keys), row[1])
+        with VerticalScroll(classes="dialog wide") as body:    # scrolls when the window is short
+            yield Label("Shortcuts   ↑ ↓ scroll · Esc close", classes="dialog-title")
             yield Static(t)
             yield Static("Change any of them under [keys] in ~/.config/petrzpav-mail/config.toml",
                          classes="note", markup=False)
+        self.body = body
+
+    def on_mount(self):
+        self.body.focus()
 
 
 def quote_context(quote: str) -> tuple[str, str]:
