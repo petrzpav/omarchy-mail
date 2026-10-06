@@ -146,8 +146,9 @@ mail without the TUI: `mail folders`, `ls [FOLDER] [--unread]`, `search 'GMAIL Q
 `draft --reply|--reply-all|--forward ID` → `drafts --show` → `send` (a draft also lands in Gmail
 Drafts, so you can finish it on the phone). Lists take `--json`; see `mail -h`.
 
-`install.sh` links `skill/` into `~/.claude/skills/mail` when Claude Code is installed, so Claude
-knows these commands (and drafts first, sending only when you say so).
+To let Claude Code use these commands, run `install.sh --skill`: it links `skill/` into
+`~/.claude/skills/mail`, so Claude knows them in every project (and drafts first, sending only
+when you say so). Plain `install.sh` leaves `~/.claude` alone; `--remove` takes the link back.
 
 ## License
 

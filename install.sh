@@ -5,6 +5,7 @@
 # never replaces a file it didn't create, and never touches an existing config.
 #
 #   install.sh              install
+#   install.sh --skill      install, and also let Claude Code use `mail` (~/.claude/skills/mail)
 #   install.sh --remove     undo all of it (your config and mail cache stay)
 
 set -euo pipefail
@@ -48,7 +49,7 @@ fi
 mkdir -p "$bin" "$apps"
 link "$root/bin/mail"
 link "$root/bin/mail-window"
-if [[ -d $HOME/.claude ]]; then   # a skill, so Claude Code can drive the `mail` commands
+if [[ ${1:-} == --skill ]]; then   # only when asked: a skill is visible to Claude Code in every project
   skill="$HOME/.claude/skills/mail"
   if [[ -e $skill || -L $skill ]] && ! mine_link "$skill"; then
     echo "skipped $skill: it already exists and isn't from this plugin"
