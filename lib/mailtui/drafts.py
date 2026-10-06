@@ -15,6 +15,7 @@ from email.headerregistry import Address
 from email.message import EmailMessage
 from email.utils import formatdate, getaddresses, make_msgid
 
+from . import text
 from .config import STATE_DIR, Config
 
 DRAFT_DIR = STATE_DIR / "drafts"
@@ -71,7 +72,7 @@ def new(ident: str, to="", cc="", subject="", body="", quote="", headers=None, a
               headers=dict(headers or {}), gmail_msgid=gmail_msgid, initial_body=body,
               message_id=message_id or make_msgid(domain=ident.split("@")[-1]))
     for part in attach_parts or []:
-        add_attachment(d, part.get_filename() or "attachment", part.get_content_type(),
+        add_attachment(d, text.attachment_name(part), part.get_content_type(),
                        part.get_payload(decode=True) or b"")
     d.initial = d.snapshot()
     _live[d.id] = d
@@ -83,9 +84,10 @@ def _dir(d: Draft):
 
 
 def add_attachment(d: Draft, filename: str, ctype: str, data: bytes):
+    filename = text.clean_name(filename)
     folder = _dir(d)
     folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"{len(d.attachments)}-{filename.replace('/', '_')}"
+    path = folder / f"{len(d.attachments)}-{filename}"
     path.write_bytes(data)
     d.attachments.append({"path": str(path), "filename": filename, "ctype": ctype})
 

@@ -136,7 +136,7 @@ def _message(mbox: Mailbox, m: Msg, full: bool, max_chars: int) -> dict:
     return {"id": m.msgid, "date": _date(m), "from": f"{m.sender} <{m.sender_addr}>" if m.sender != m.sender_addr else m.sender_addr,
             "to": m.to, "cc": m.cc, "subject": m.subject, "labels": _labels(m), "unread": not m.seen,
             "body": body, "quoted_history_hidden": bool(quoted),
-            "attachments": [{"filename": p.get_filename(), "type": p.get_content_type(),
+            "attachments": [{"filename": text.attachment_name(p), "type": p.get_content_type(),
                              "size": len(p.get_payload(decode=True) or b"")}
                             for p in text.attachments(parsed)]}
 
@@ -175,7 +175,7 @@ def cmd_attachments(cfg: Config, args):
     out_dir.mkdir(parents=True, exist_ok=True)
     for m in msgs:
         for p in text.attachments(mbox.fetch(m)):
-            dest = out_dir / Path(p.get_filename()).name
+            dest = out_dir / text.attachment_name(p)
             dest.write_bytes(p.get_payload(decode=True) or b"")
             print(dest)
     mbox.close()
@@ -291,7 +291,7 @@ def _reply_fields(cfg: Config, mbox: Mailbox, ident: int, all_: bool, forward: b
 
 def _draft_json(d: drafts.Draft) -> dict:
     return {"draft": d.id, "from": d.ident, "to": d.to, "cc": d.cc, "subject": d.subject,
-            "body": d.body, "attachments": [a["filename"] for a in d.attachments],
+            "body": d.body, "attachments": [text.clean_name(a["filename"]) for a in d.attachments],
             "reply": d.reply, "forward": d.forward, "in_gmail": bool(d.gmail_msgid)}
 
 
@@ -344,7 +344,7 @@ def cmd_drafts(cfg: Config, args):
         print(f"From: {m['From']}\nTo: {m['To'] or ''}" + (f"\nCc: {m['Cc']}" if m["Cc"] else "")
               + f"\nSubject: {m['Subject']}")
         for a in d.attachments:
-            print(f"Attachment: {a['filename']}")
+            print(f"Attachment: {text.clean_name(a['filename'])}")
         print()
         print(d.body.rstrip())
         if d.quote:
