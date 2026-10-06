@@ -32,6 +32,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Compact reply and forward, with the original message below; compose fills the terminal.
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
-[Unreleased]: https://https://github.com/petrzpav/omarchy-mail/compare/staging...dev
+[Unreleased]: https://github.com/petrzpav/omarchy-mail/compare/staging...dev
 [0.2.0]: https://github.com/petrzpav/omarchy-mail/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/petrzpav/omarchy-mail/releases/tag/v0.1.0
