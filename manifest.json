@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "petrzpav.mail",
   "name": "Mail",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": "Pavel Petržela",
   "license": "MIT",
   "description": "Light terminal Gmail client with arrow-key navigation, categories as Gmail labels, and Jev (TypeSafe AI) auto-sorting.",
