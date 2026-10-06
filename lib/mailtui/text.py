@@ -175,3 +175,13 @@ FORWARD_HEAD = "---------- Forwarded message ---------"   # what Gmail writes ab
 
 def quote(text: str) -> str:
     return "\n".join("> " + line if line else ">" for line in text.splitlines())
+
+
+def formataddr(pair) -> str:
+    """Human-readable "Name <addr>" (email.utils.formataddr would RFC 2047-encode the name)."""
+    name, addr = pair
+    if not name or name == addr:
+        return addr
+    if any(ch in name for ch in ',;:<>@"()[]\\'):
+        name = '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return f"{name} <{addr}>"

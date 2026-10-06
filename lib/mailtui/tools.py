@@ -9,10 +9,11 @@ like the client, and saves an undo record that `mail undo` reverts.
 import json
 import mimetypes
 import sys
-from email.utils import formataddr, getaddresses
+from email.utils import getaddresses
 from pathlib import Path
 
 from . import drafts, ops, smtp, text
+from .text import formataddr
 from .config import STATE_DIR, Config
 from .imap import Folder, ImapError, Mailbox, Msg
 

@@ -32,6 +32,7 @@ from . import config, drafts, jev, ops, smtp, text
 from .config import CACHE_DIR, Category, Config
 from .imap import Folder, Msg, parse
 from .store import Store
+from .text import formataddr
 
 PENDING_GRACE = 30  # seconds a local change still wins over what a sync reports
 
@@ -75,16 +76,6 @@ KEY_HELP = [
     ("{refresh}", "refresh"),
     ("{help}  ·  Ctrl+Q", "this help  ·  quit"),
 ]
-
-
-def formataddr(pair) -> str:
-    """Human-readable "Name <addr>" (email.utils.formataddr would RFC 2047-encode the name)."""
-    name, addr = pair
-    if not name or name == addr:
-        return addr
-    if any(ch in name for ch in ',;:<>@"()[]\\'):
-        name = '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return f"{name} <{addr}>"
 
 
 def pretty(key: str) -> str:
