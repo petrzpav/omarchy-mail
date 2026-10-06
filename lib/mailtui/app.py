@@ -1325,7 +1325,7 @@ class MainScreen(Screen):
         parts = text.attachments(parsed) if parsed else []
         kids = [Static(meta, classes="meta")]
         if parts:
-            kids.append(OptionList(*[Option(f"📎 {p.get_filename()}  "
+            kids.append(OptionList(*[Option(f"📎 {text.clean(p.get_filename())}  "
                                             f"{len(p.get_payload(decode=True) or b'') // 1024} kB", id=str(i))
                                      for i, p in enumerate(parts)], classes="attachments"))
         if is_md and main:

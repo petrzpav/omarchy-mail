@@ -11,6 +11,7 @@ import email
 import email.policy
 import imaplib
 import re
+import ssl
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -18,6 +19,7 @@ from email.header import decode_header, make_header
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
 from .config import Config
+from .text import clean
 
 HEADER_FIELDS = "FROM TO CC SUBJECT DATE MESSAGE-ID DELIVERED-TO X-FORWARDED-TO X-ORIGINAL-TO"
 SPECIAL = {"\\All": "all", "\\Trash": "trash", "\\Sent": "sent", "\\Junk": "spam",
@@ -66,9 +68,9 @@ def decode(value) -> str:
     if not value:
         return ""
     try:
-        return str(make_header(decode_header(str(value)))).replace("\r", "").replace("\n", " ")
+        return clean(str(make_header(decode_header(str(value)))).replace("\n", " "))
     except Exception:
-        return str(value)
+        return clean(str(value))
 
 
 def _tokens(s: str) -> list[str]:
@@ -136,7 +138,8 @@ class Mailbox:
     def _connect(self):
         if not self.cfg.password:
             raise ImapError("GMAIL_APP_PASSWORD missing in ~/.config/petrzpav-mail/secrets")
-        conn = imaplib.IMAP4_SSL(self.cfg.imap_host, timeout=30)
+        # imaplib's own default context checks no certificate; the app password must only go to Gmail
+        conn = imaplib.IMAP4_SSL(self.cfg.imap_host, ssl_context=ssl.create_default_context(), timeout=30)
         try:
             conn.login(self.cfg.email, self.cfg.password)
         except imaplib.IMAP4.error as e:
