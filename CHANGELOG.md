@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.2.2] - 2026-10-06
+
+### Changed
+
+- The Claude Code skill is installed only with `install.sh --skill`.
+
+### Security
+
+- Escape sequences and control characters in a message, its headers and attachment names never reach the terminal.
+- The Gmail server's certificate is verified before the app password is sent.
+
 ## [0.2.1] - 2026-10-06
 
 ### Added
@@ -36,6 +47,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Compact reply and forward, with the original message below; compose fills the terminal.
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
+[0.2.2]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.1...v0.2.2
 [0.2.1]: https://https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/petrzpav/omarchy-mail/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/petrzpav/omarchy-mail/releases/tag/v0.1.0
