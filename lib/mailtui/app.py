@@ -1844,8 +1844,7 @@ class MainScreen(Screen):
                 return
             if not subj.lower().startswith("re:"):
                 subj = "Re: " + subj
-            reply_to = formataddr(getaddresses([str(parsed.get("Reply-To") or "")])[0]) \
-                if parsed.get("Reply-To") else formataddr((m.sender, m.sender_addr))
+            reply_to = text.header_addr(parsed, "Reply-To") or formataddr((m.sender, m.sender_addr))
             cc = ""
             if all_:
                 mine = {i.email.lower() for i in self.cfg.identities} | {self.cfg.email.lower()}
