@@ -6,6 +6,20 @@ from email.message import EmailMessage
 import html2text
 
 
+# Escape sequences (CSI, OSC, DCS…) and other control characters, which a sender could use to
+# drive the terminal: colours, the window title, the clipboard (OSC 52)… Tabs and newlines stay.
+_CONTROL = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"           # OSC … BEL / ST
+                      r"|\x1b[P^_X][^\x1b]*(?:\x1b\\)?"                  # DCS, PM, APC, SOS … ST
+                      r"|\x1b\[[0-?]*[ -/]*[@-~]"                         # CSI
+                      r"|\x1b.?"                                         # any other escape
+                      r"|[\x00-\x08\x0b-\x1f\x7f-\x9f]")                   # C0 and C1 controls
+
+
+def clean(s: str) -> str:
+    """Text from a sender, safe to put on the terminal."""
+    return _CONTROL.sub("", s)
+
+
 def body_text(msg: EmailMessage) -> str:
     return body(msg)[0]
 
@@ -33,7 +47,7 @@ def body(msg: EmailMessage) -> tuple[str, bool]:
         text = conv.handle(html)
     else:
         text = plain or ""
-    text = text.replace("\r\n", "\n")
+    text = clean(text.replace("\r\n", "\n"))
     text = re.sub(r"(?m)^[ \t\xa0]+$", "", text)   # whitespace-only lines count as blank
     is_md = bool(html) or looks_like_markdown(text)
     if is_md:
