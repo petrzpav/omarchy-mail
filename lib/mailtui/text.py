@@ -21,6 +21,11 @@ def clean(s: str) -> str:
     return _CONTROL.sub("", s)
 
 
+def clean_line(s: str) -> str:
+    """Sender text for a one-line field (a name, an address, a subject): cleaned, on one line."""
+    return " ".join(clean(s or "").split())
+
+
 def clean_name(name: str) -> str:
     """A file name from a sender, safe to show on one line and to save under."""
     name = os.path.basename(" ".join(clean(name or "").split()))
@@ -202,9 +207,25 @@ def quote(text: str) -> str:
     return "\n".join("> " + line if line else ">" for line in text.splitlines())
 
 
+def header_addr(msg: EmailMessage, name: str) -> str:
+    """The first address in a header (Reply-To…) as a cleaned "Name <addr>", "" without one.
+    The email package refuses an encoded name hiding CR/LF, so then the raw header is decoded."""
+    from email.utils import getaddresses
+    try:
+        value = str(msg.get(name) or "")
+    except ValueError:
+        from .imap import decode
+        value = next((v for k, v in msg.raw_items() if k.lower() == name.lower()), "")
+        pairs = getaddresses([value])
+        return formataddr((decode(pairs[0][0]), pairs[0][1])) if pairs and pairs[0][1] else ""
+    pairs = getaddresses([value]) if value else []
+    return formataddr(pairs[0]) if pairs and pairs[0][1] else ""
+
+
 def formataddr(pair) -> str:
-    """Human-readable "Name <addr>" (email.utils.formataddr would RFC 2047-encode the name)."""
-    name, addr = pair
+    """Human-readable "Name <addr>" (email.utils.formataddr would RFC 2047-encode the name).
+    Both parts are sender text (a Reply-To name, say), so they are cleaned onto one line."""
+    name, addr = clean_line(pair[0]), clean_line(pair[1])
     if not name or name == addr:
         return addr
     if any(ch in name for ch in ',;:<>@"()[]\\'):

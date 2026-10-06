@@ -276,8 +276,7 @@ def _reply_fields(cfg: Config, mbox: Mailbox, ident: int, all_: bool, forward: b
         return {"ident": ident_addr, "subject": subj, "quote": quote, "attach_parts": text.attachments(parsed)}
     if not subj.lower().startswith("re:"):
         subj = "Re: " + subj
-    to = formataddr(getaddresses([str(parsed["Reply-To"])])[0]) if parsed.get("Reply-To") \
-        else formataddr((m.sender, m.sender_addr))
+    to = text.header_addr(parsed, "Reply-To") or formataddr((m.sender, m.sender_addr))
     cc = ""
     if all_:
         mine = {i.email.lower() for i in cfg.identities} | {cfg.email.lower()}

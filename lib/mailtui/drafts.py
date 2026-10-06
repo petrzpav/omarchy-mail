@@ -74,6 +74,7 @@ def new(ident: str, to="", cc="", subject="", body="", quote="", headers=None, a
     for part in attach_parts or []:
         add_attachment(d, text.attachment_name(part), part.get_content_type(),
                        part.get_payload(decode=True) or b"")
+    _clean(d)
     d.initial = d.snapshot()
     _live[d.id] = d
     return d
@@ -93,16 +94,28 @@ def add_attachment(d: Draft, filename: str, ctype: str, data: bytes):
 
 
 def _readable(addrs: str) -> str:
-    """Names in To / Cc as people read them, never RFC 2047 encoded-words (=?utf-8?b?…?=)."""
+    """Names in To / Cc as people read them, never RFC 2047 encoded-words (=?utf-8?b?…?=),
+    and never with a sender's control characters."""
     if "=?" not in addrs:
-        return addrs
+        return text.clean_line(addrs)
     from .imap import decode
-    from .text import formataddr
-    return ", ".join(formataddr((decode(n), a)) for n, a in getaddresses([addrs]) if a)
+    return ", ".join(text.formataddr((decode(n), a)) for n, a in getaddresses([addrs]) if a)
+
+
+def _clean(d: Draft) -> Draft:
+    """Sender text reaches drafts (a Reply-To name, quoted headers, a draft from Gmail): keep
+    every field terminal-safe, also in drafts saved before this was done."""
+    d.to, d.cc = _readable(d.to), _readable(d.cc)
+    d.subject = text.clean_line(d.subject)
+    d.body, d.quote, d.initial_body = text.clean(d.body), text.clean(d.quote), text.clean(d.initial_body)
+    d.headers = {text.clean_line(str(k)): text.clean_line(str(v)) for k, v in d.headers.items()}
+    for a in d.attachments:
+        a["filename"] = text.clean_name(a["filename"])
+    return d
 
 
 def save(d: Draft):
-    d.to, d.cc = _readable(d.to), _readable(d.cc)
+    _clean(d)
     d.updated = time.time()
     DRAFT_DIR.mkdir(parents=True, exist_ok=True)
     tmp = DRAFT_DIR / f"{d.id}.tmp"
@@ -117,8 +130,7 @@ def load_all() -> list[Draft]:
             d = Draft(**json.loads(p.read_text()))
         except (ValueError, TypeError):
             continue
-        d.to, d.cc = _readable(d.to), _readable(d.cc)
-        out.append(_live.setdefault(d.id, d))
+        out.append(_live.setdefault(d.id, _clean(d)))
     return sorted(out, key=lambda d: d.updated, reverse=True)
 
 
