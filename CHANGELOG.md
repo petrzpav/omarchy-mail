@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.2.4] - 2026-10-06
+
+### Security
+
+- Sender names and addresses (Reply-To, To, Cc), subjects and quoted headers are cleaned of escape sequences and control characters in replies, forwards and drafts, including drafts saved earlier.
+
+### Fixed
+
+- Replying to a message whose Reply-To name hides a line break no longer fails.
+
 ## [0.2.3] - 2026-10-06
 
 ### Security
@@ -53,6 +63,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Compact reply and forward, with the original message below; compose fills the terminal.
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
+[0.2.4]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.1...v0.2.2
 [0.2.1]: https://https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
