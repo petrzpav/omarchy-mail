@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.2.3] - 2026-10-06
+
+### Security
+
+- Attachment names from a sender are cleaned of escape sequences, control characters and folders before they are shown, saved or forwarded, in the client and in the mail command.
+
 ## [0.2.2] - 2026-10-06
 
 ### Changed
@@ -47,6 +53,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Compact reply and forward, with the original message below; compose fills the terminal.
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
+[0.2.3]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.1...v0.2.2
 [0.2.1]: https://https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/petrzpav/omarchy-mail/compare/v0.1.0...v0.2.0
