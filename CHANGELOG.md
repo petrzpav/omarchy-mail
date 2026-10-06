@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-06
+
+### Added
+
+- Instructions for AI agents: the repository follows Flow (ig-flow and ig-changelog skills).
+
 ## [0.2.0] - 2026-10-06
 
 ### Added
@@ -33,5 +39,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
 [Unreleased]: https://github.com/petrzpav/omarchy-mail/compare/staging...dev
+[0.2.1]: https://https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/petrzpav/omarchy-mail/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/petrzpav/omarchy-mail/releases/tag/v0.1.0
