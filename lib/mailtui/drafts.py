@@ -13,7 +13,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from email.headerregistry import Address
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
+from email.utils import formatdate, getaddresses, make_msgid
 
 from .config import STATE_DIR, Config
 
@@ -90,7 +90,17 @@ def add_attachment(d: Draft, filename: str, ctype: str, data: bytes):
     d.attachments.append({"path": str(path), "filename": filename, "ctype": ctype})
 
 
+def _readable(addrs: str) -> str:
+    """Names in To / Cc as people read them, never RFC 2047 encoded-words (=?utf-8?b?…?=)."""
+    if "=?" not in addrs:
+        return addrs
+    from .imap import decode
+    from .text import formataddr
+    return ", ".join(formataddr((decode(n), a)) for n, a in getaddresses([addrs]) if a)
+
+
 def save(d: Draft):
+    d.to, d.cc = _readable(d.to), _readable(d.cc)
     d.updated = time.time()
     DRAFT_DIR.mkdir(parents=True, exist_ok=True)
     tmp = DRAFT_DIR / f"{d.id}.tmp"
@@ -105,6 +115,7 @@ def load_all() -> list[Draft]:
             d = Draft(**json.loads(p.read_text()))
         except (ValueError, TypeError):
             continue
+        d.to, d.cc = _readable(d.to), _readable(d.cc)
         out.append(_live.setdefault(d.id, d))
     return sorted(out, key=lambda d: d.updated, reverse=True)
 
