@@ -334,7 +334,7 @@ class Compose(ModalScreen[str]):
                         yield Label("From", classes="field")
                         yield Select(idents, value=d.ident, allow_blank=False, id="from", compact=True)
                     if d.attachments:
-                        yield Static("📎 " + ", ".join(a["filename"] for a in d.attachments), classes="note")
+                        yield Static("📎 " + ", ".join(text.clean_name(a["filename"]) for a in d.attachments), classes="note")
                     yield TextArea(d.body, id="body", soft_wrap=True, show_line_numbers=False, compact=True)
                     if d.quote:
                         head, said = quote_context(d.quote)
@@ -1325,7 +1325,7 @@ class MainScreen(Screen):
         parts = text.attachments(parsed) if parsed else []
         kids = [Static(meta, classes="meta")]
         if parts:
-            kids.append(OptionList(*[Option(f"📎 {text.clean(p.get_filename())}  "
+            kids.append(OptionList(*[Option(f"📎 {text.attachment_name(p)}  "
                                             f"{len(p.get_payload(decode=True) or b'') // 1024} kB", id=str(i))
                                      for i, p in enumerate(parts)], classes="attachments"))
         if is_md and main:
@@ -1468,7 +1468,7 @@ class MainScreen(Screen):
         part = text.attachments(self.bodies[col.msg.msgid])[int(event.option.id)]
         folder = CACHE_DIR / "attachments"
         folder.mkdir(parents=True, exist_ok=True)
-        path = folder / os.path.basename(part.get_filename())
+        path = folder / text.attachment_name(part)
         path.write_bytes(part.get_payload(decode=True) or b"")
         subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)

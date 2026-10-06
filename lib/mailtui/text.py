@@ -1,5 +1,6 @@
 """Turn a parsed message into readable text, quotes and attachment lists."""
 
+import os
 import re
 from email.message import EmailMessage
 
@@ -18,6 +19,16 @@ _CONTROL = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"           # OSC … 
 def clean(s: str) -> str:
     """Text from a sender, safe to put on the terminal."""
     return _CONTROL.sub("", s)
+
+
+def clean_name(name: str) -> str:
+    """A file name from a sender, safe to show on one line and to save under."""
+    name = os.path.basename(" ".join(clean(name or "").split()))
+    return name if name not in ("", ".", "..") else "attachment"
+
+
+def attachment_name(part: EmailMessage) -> str:
+    return clean_name(part.get_filename())
 
 
 def body_text(msg: EmailMessage) -> str:
