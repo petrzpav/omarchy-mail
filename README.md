@@ -123,7 +123,8 @@ Auto-sort: `systemctl --user enable --now mail-sort.timer`. Every decision is lo
 Mail is grouped into Gmail conversations. Opening one switches to a focus mode: one centered
 column, the newest message open, older ones folded to a line (↑↓ move, Enter/Space open), quoted
 history folded under "··· earlier messages". Archive, move and delete act on the whole conversation.
-Tab walks the links and Enter opens one, or Ctrl+click it. Drag the mouse to select text, `Ctrl+C` copies it.
+Tab walks the links and Enter opens one, or Ctrl+click it; Trello links open in the Trello client
+if it's installed. Drag the mouse to select text, `Ctrl+C` copies it.
 
 ## Writing
 

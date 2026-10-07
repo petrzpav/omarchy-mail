@@ -2,6 +2,7 @@
 
 import os
 import re
+import shutil
 import subprocess
 import time
 import unicodedata
@@ -33,6 +34,8 @@ from .config import CACHE_DIR, Category, Config
 from .imap import Folder, Msg, parse
 from .store import Store
 from .text import formataddr
+
+TRELLO_LINK = re.compile(r"https?://(www\.)?trello\.com/[bc]/")
 
 PENDING_GRACE = 30  # seconds a local change still wins over what a sync reports
 
@@ -1477,7 +1480,8 @@ class MainScreen(Screen):
         self.open_href(s.content.links[i][0])
 
     def open_href(self, href: str):
-        """Open a link from a message: mailto: in a new message, anything else in the browser."""
+        """Open a link from a message: mailto: in a new message, a Trello card or board in the Trello
+        client when it's installed, anything else in the browser."""
         if href.startswith("mailto:"):
             u = urlparse(href)
             q = parse_qs(u.query)
@@ -1485,8 +1489,10 @@ class MainScreen(Screen):
             self.open_compose(ident=ident, to=unquote(u.path), cc=",".join(q.get("cc", [])),
                               subject=q.get("subject", [""])[0], body=q.get("body", [""])[0])
             return
-        subprocess.Popen(["xdg-open", href], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
+        cmd = ["xdg-open", href]
+        if TRELLO_LINK.match(href) and shutil.which("trello"):
+            cmd = ["sh", "-c", 'trello open "$1" || xdg-open "$1"', "sh", href]
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         self.notify(f"Opened {href[:60]}", timeout=2)
 
     @on(OptionList.OptionSelected, ".attachments")
