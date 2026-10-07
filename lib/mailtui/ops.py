@@ -193,9 +193,11 @@ def sort_history(limit=50) -> list[dict]:
     entries = []
     for line in lines:
         try:
-            entries.append(json.loads(line))
+            e = json.loads(line)
         except ValueError:
-            pass
+            continue
+        if isinstance(e, dict):     # entries logged before sender text was cleaned may hold escapes
+            entries.append({k: text.clean_line(v) if isinstance(v, str) else v for k, v in e.items()})
     undone = {e["undone_of"] for e in entries if "undone_of" in e}
     out = []
     for e in reversed(entries):
