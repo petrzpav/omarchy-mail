@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-07
+
+### Security
+
+- Attachment content types are cleaned of control characters before `mail show` prints them and before a forward or draft sends them on.
+
 ## [0.2.4] - 2026-10-06
 
 ### Security
@@ -67,6 +73,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 [Unreleased]: https://github.com/petrzpav/omarchy-mail/compare/staging...dev
 [0.2.1]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
+[0.2.5]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.1...v0.2.2

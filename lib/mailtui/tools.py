@@ -136,7 +136,7 @@ def _message(mbox: Mailbox, m: Msg, full: bool, max_chars: int) -> dict:
     return {"id": m.msgid, "date": _date(m), "from": f"{m.sender} <{m.sender_addr}>" if m.sender != m.sender_addr else m.sender_addr,
             "to": m.to, "cc": m.cc, "subject": m.subject, "labels": _labels(m), "unread": not m.seen,
             "body": body, "quoted_history_hidden": bool(quoted),
-            "attachments": [{"filename": text.attachment_name(p), "type": p.get_content_type(),
+            "attachments": [{"filename": text.attachment_name(p), "type": text.attachment_type(p),
                              "size": len(p.get_payload(decode=True) or b"")}
                             for p in text.attachments(parsed)]}
 

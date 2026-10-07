@@ -36,6 +36,21 @@ def attachment_name(part: EmailMessage) -> str:
     return clean_name(part.get_filename())
 
 
+# A MIME type as RFC 2045 allows it: two tokens of printable ASCII without specials.
+_MIME_TYPE = re.compile(r"[!#$%&'*+\-.0-9A-Z^_`a-z{|}~]+/[!#$%&'*+\-.0-9A-Z^_`a-z{|}~]+")
+
+
+def clean_type(ctype: str) -> str:
+    """A content type from a sender, safe to show and to send on: anything else (control
+    characters the parser keeps as defects…) becomes application/octet-stream."""
+    ctype = (ctype or "").strip().lower()
+    return ctype if _MIME_TYPE.fullmatch(ctype) else "application/octet-stream"
+
+
+def attachment_type(part: EmailMessage) -> str:
+    return clean_type(part.get_content_type())
+
+
 def body_text(msg: EmailMessage) -> str:
     return body(msg)[0]
 
