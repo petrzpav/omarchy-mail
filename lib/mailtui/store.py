@@ -19,6 +19,7 @@ from datetime import datetime
 from email.utils import getaddresses
 from pathlib import Path
 
+from . import text
 from .config import CACHE_DIR, STATE_DIR, Config
 from .imap import Folder, Mailbox, Msg
 
@@ -35,8 +36,24 @@ def msg_to_dict(m: Msg) -> dict:
     return d
 
 
-def msg_from_dict(d: dict) -> Msg:
+# Sender text a cached message carries. Caches written before it was cleaned at the source
+# still hold escape sequences, so it is cleaned again on every load.
+SENDER_FIELDS = ("sender", "sender_addr", "subject", "to", "cc", "message_id")
+
+
+def clean_dict(d: dict) -> dict:
+    """A cached message, its sender text terminal-safe and on one line."""
     d = dict(d)
+    for k in SENDER_FIELDS:
+        if isinstance(d.get(k), str):
+            d[k] = text.clean_line(d[k])
+    if isinstance(d.get("recipients"), list):
+        d["recipients"] = [text.clean_line(a) for a in d["recipients"] if isinstance(a, str)]
+    return d
+
+
+def msg_from_dict(d: dict) -> Msg:
+    d = clean_dict(d)
     d["flags"], d["labels"] = set(d.get("flags", [])), set(d.get("labels", []))
     d["date"] = datetime.fromisoformat(d["date"]) if d.get("date") else None
     return Msg(**d)
@@ -169,6 +186,9 @@ class Store:
             except (OSError, ValueError):
                 continue
             for m in msgs:
+                if not isinstance(m, dict):
+                    continue
+                m = clean_dict(m)
                 if m.get("msgid") in seen:
                     continue
                 seen.add(m.get("msgid"))
