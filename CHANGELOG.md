@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Text of an open e-mail can be selected with the mouse and copied with Ctrl+C.
+- Ctrl+click opens a link in an open e-mail.
+
 ## [0.2.5] - 2026-10-07
 
 ### Security

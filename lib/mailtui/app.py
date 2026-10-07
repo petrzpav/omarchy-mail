@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.actions import SkipAction
 from textual.binding import Binding
@@ -48,6 +48,8 @@ KEY_HELP = [
     ("↑ ↓", "previous / next message"),
     ("Enter / Space", "expand / collapse the message"),
     ("Tab / Shift+Tab  ·  Enter", "next / previous link  ·  open it"),
+    ("Ctrl+click", "open a link"),
+    ("drag  ·  Ctrl+C", "select text  ·  copy it"),
     "Sorting",
     ("{select}  ·  {select_all}", "select for bulk actions  ·  select all"),
     ("{move}", "move to category"),
@@ -677,6 +679,28 @@ def group(msgs: list[Msg], me: set[str]) -> list[Conv]:
 
 class Messages(DataTable):
     pass
+
+
+class Body(Static):
+    """A message body in the reader: its text can be selected with the mouse (Ctrl+C copies)
+    and Ctrl+click opens a link."""
+
+    def get_selection(self, selection):
+        if not isinstance(self.content, text.Links):
+            return super().get_selection(selection)
+        return selection.extract("\n".join(self.content.lines)), "\n"
+
+    def selection_updated(self, selection):
+        if not isinstance(self.content, text.Links):
+            return super().selection_updated(selection)
+        self.content.selection = selection
+        self.update(self.content, layout=False)   # drop Textual's cached render
+
+    def on_click(self, event: events.Click):
+        href = event.style.link if event.ctrl else None
+        if href:
+            event.stop()
+            self.screen.open_href(href)
 
 
 class Reader(VerticalScroll):
@@ -1332,9 +1356,9 @@ class MainScreen(Screen):
             body = text.Links(Markdown(main))
         else:
             body = text.Links(text.linkify(text.reflow(main))) if main else "(empty)"
-        kids.append(Static(body, markup=False, classes="body"))
+        kids.append(Body(body, markup=False, classes="body"))
         if quoted:
-            kids.append(Collapsible(Static(text.Links(text.linkify(quoted)), markup=False, classes="history"),
+            kids.append(Collapsible(Body(text.Links(text.linkify(quoted)), markup=False, classes="history"),
                                     title="··· earlier messages", collapsed=True, classes="quoted",
                                     collapsed_symbol=" ", expanded_symbol=" "))
         dot = "•" if not m.seen else " "
@@ -1450,7 +1474,10 @@ class MainScreen(Screen):
         if self.focused_pane() != "reader" or not self._link:
             raise SkipAction()
         s, i = self._link
-        href = s.content.links[i][0]
+        self.open_href(s.content.links[i][0])
+
+    def open_href(self, href: str):
+        """Open a link from a message: mailto: in a new message, anything else in the browser."""
         if href.startswith("mailto:"):
             u = urlparse(href)
             q = parse_qs(u.query)
@@ -2019,6 +2046,7 @@ class MailApp(App):
     /* The ANSI theme leaves selections the same colour as the background: make them visible. */
     TextArea > .text-area--selection { background: ansi_blue; color: ansi_black; text-style: none; }
     Input > .input--selection { background: ansi_blue; color: ansi_black; }
+    Screen > .screen--selection { background: ansi_blue; color: ansi_black; }
     """
 
     def __init__(self, cfg: Config, compose: str | None = None):
