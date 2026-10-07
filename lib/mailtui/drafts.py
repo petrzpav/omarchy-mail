@@ -72,7 +72,7 @@ def new(ident: str, to="", cc="", subject="", body="", quote="", headers=None, a
               headers=dict(headers or {}), gmail_msgid=gmail_msgid, initial_body=body,
               message_id=message_id or make_msgid(domain=ident.split("@")[-1]))
     for part in attach_parts or []:
-        add_attachment(d, text.attachment_name(part), part.get_content_type(),
+        add_attachment(d, text.attachment_name(part), text.attachment_type(part),
                        part.get_payload(decode=True) or b"")
     _clean(d)
     d.initial = d.snapshot()
@@ -90,7 +90,7 @@ def add_attachment(d: Draft, filename: str, ctype: str, data: bytes):
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{len(d.attachments)}-{filename}"
     path.write_bytes(data)
-    d.attachments.append({"path": str(path), "filename": filename, "ctype": ctype})
+    d.attachments.append({"path": str(path), "filename": filename, "ctype": text.clean_type(ctype)})
 
 
 def _readable(addrs: str) -> str:
@@ -111,6 +111,7 @@ def _clean(d: Draft) -> Draft:
     d.headers = {text.clean_line(str(k)): text.clean_line(str(v)) for k, v in d.headers.items()}
     for a in d.attachments:
         a["filename"] = text.clean_name(a["filename"])
+        a["ctype"] = text.clean_type(a.get("ctype"))
     return d
 
 
