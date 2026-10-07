@@ -345,7 +345,7 @@ class Compose(ModalScreen[str]):
                         head, said = quote_context(d.quote)
                         yield Static(("↪ " if d.forward else "↩ ") + head, classes="context-head", markup=False)
                         with VerticalScroll(id="context", can_focus=False):
-                            yield Static(said, markup=False)
+                            yield Body(text.Links(text.linkify(said)), markup=False)
                 # Jev's review, always open beside the text.
                 with VerticalScroll(id="jev-side", can_focus=False):
                     yield Static(self._review_text(None), id="review")
@@ -685,8 +685,8 @@ class Messages(DataTable):
 
 
 class Body(Static):
-    """A message body in the reader: its text can be selected with the mouse (Ctrl+C copies)
-    and Ctrl+click opens a link."""
+    """A message body in the reader or the message a reply quotes: its text can be selected
+    with the mouse (Ctrl+C copies) and Ctrl+click opens a link."""
 
     def get_selection(self, selection):
         if not isinstance(self.content, text.Links):
@@ -703,7 +703,7 @@ class Body(Static):
         href = event.style.link if event.ctrl else None
         if href:
             event.stop()
-            self.screen.open_href(href)
+            self.app.main.open_href(href)
 
 
 class Reader(VerticalScroll):

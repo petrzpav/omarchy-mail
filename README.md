@@ -131,6 +131,7 @@ if it's installed. Drag the mouse to select text, `Ctrl+C` copies it.
 Replies are sent from the address the message was sent to. In compose, `Alt+S` picks another
 From address, and To and Cc suggest people from your mail as you type (↑↓, Enter or Tab to take one).
 Drafts are saved as you type, locally and to Gmail's Drafts, so you can finish them on your phone.
+Ctrl+click opens a link in the message shown under a reply or forward.
 
 Sending goes through Gmail SMTP, which only accepts From addresses verified as "Send mail as" in
 Gmail settings. For any other address, give that identity `smtp = "host:port"` in config.toml and

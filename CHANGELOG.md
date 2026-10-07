@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ### Added
 
 - Text of an open e-mail can be selected with the mouse and copied with Ctrl+C.
-- Ctrl+click opens a link in an open e-mail.
+- Ctrl+click opens a link in an open e-mail and in the message quoted under a reply or forward.
 - A Trello card or board link opens in the Trello client when it is installed.
 
 ## [0.2.6] - 2026-10-07
