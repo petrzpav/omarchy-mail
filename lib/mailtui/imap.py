@@ -19,7 +19,7 @@ from email.header import decode_header, make_header
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
 
 from .config import Config
-from .text import clean
+from .text import clean, clean_line
 
 HEADER_FIELDS = "FROM TO CC SUBJECT DATE MESSAGE-ID DELIVERED-TO X-FORWARDED-TO X-ORIGINAL-TO"
 SPECIAL = {"\\All": "all", "\\Trash": "trash", "\\Sent": "sent", "\\Junk": "spam",
@@ -247,7 +247,7 @@ class Mailbox:
             msg.sender, msg.sender_addr = name or addr, addr
             msg.subject = decode(h["Subject"]) or "(no subject)"
             msg.to, msg.cc = decode(h["To"]), decode(h["Cc"])
-            msg.message_id = (h["Message-ID"] or "").strip()
+            msg.message_id = clean_line(h["Message-ID"] or "")
             try:
                 msg.date = parsedate_to_datetime(h["Date"]) if h["Date"] else None
                 if msg.date and msg.date.tzinfo is None:

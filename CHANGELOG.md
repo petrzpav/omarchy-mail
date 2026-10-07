@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Ctrl+click opens a link in an open e-mail.
 - A Trello card or board link opens in the Trello client when it is installed.
 
+## [0.2.6] - 2026-10-07
+
+### Security
+
+- Message lists, conversations and the Jev history cached by earlier versions are cleaned of escape sequences and control characters before they are shown, so the client is safe right after an upgrade, before the first refresh.
+
 ## [0.2.5] - 2026-10-07
 
 ### Security
@@ -79,6 +85,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 [Unreleased]: https://github.com/petrzpav/omarchy-mail/compare/staging...dev
 [0.2.1]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
+[0.2.6]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.2...v0.2.3
