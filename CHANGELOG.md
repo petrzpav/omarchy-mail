@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-20
+
+_Stable release based on [0.3.0-rc.1]._
+
 ## [0.3.0-rc.1] - 2026-10-20
 
 ### Added
@@ -107,6 +111,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
 [Unreleased]: https://github.com/petrzpav/omarchy-mail/compare/staging...dev
+[0.3.0]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.6...v0.3.0
 [0.3.0-rc.1]: https://github.com/petrzpav/omarchy-mail/releases/tag/v0.2.6
 [0.2.1]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
 [0.2.6]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.5...v0.2.6
