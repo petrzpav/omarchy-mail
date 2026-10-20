@@ -3,6 +3,7 @@
 Every Mailbox the app opens shares one set of messages, so a label Jev adds from
 the background lane shows up in the list at once. Messages are real RFC 822 bytes,
 labels and flags behave like Gmail's (a folder's own label is hidden inside it).
+FakeWatcher plays IMAP IDLE: it reports every change to the world at once.
 """
 
 import email
@@ -22,9 +23,12 @@ class World:
 
     def __init__(self):
         self.lock = threading.RLock()
+        self.changed = threading.Condition(self.lock)
         self.msgs: dict[int, dict] = {}
         self.labels: list[str] = []
         self.next_id = 1000
+        self.modseq = 1
+        self.events: list[str] = []      # what a watcher hasn't reported yet
 
     def add(self, raw: bytes, labels=(), flags=(), thrid: int = 0) -> int:
         with self.lock:
@@ -32,7 +36,14 @@ class World:
             mid = self.next_id
             self.msgs[mid] = {"raw": raw, "labels": set(labels), "flags": set(flags),
                               "thrid": thrid or mid, "trashed": False}
+            self.touch("new" if "\\Inbox" in self.msgs[mid]["labels"] else "changed")
             return mid
+
+    def touch(self, kind="changed"):
+        with self.lock:
+            self.modseq += 1
+            self.events.append(kind)
+            self.changed.notify_all()
 
 
 WORLD = World()
@@ -44,6 +55,9 @@ class FakeMailbox:
         self.lock = WORLD.lock
 
     def close(self):
+        pass
+
+    def drop(self):
         pass
 
     # -- folders
@@ -101,6 +115,11 @@ class FakeMailbox:
     def unseen_all(self) -> dict[str, int]:
         return {f.raw: self.unseen(f.raw) for f in self.folders()}
 
+    def status(self, raw: str):
+        with self.lock:
+            n = sum(1 for r in WORLD.msgs.values() if self._in(raw, r))
+            return n, WORLD.next_id + 1, self.unseen(raw), WORLD.modseq
+
     # -- listing
 
     def messages(self, raw: str, limit=300) -> list[Msg]:
@@ -146,6 +165,7 @@ class FakeMailbox:
             for i in msgids:
                 if i in WORLD.msgs and "\\Draft" in WORLD.msgs[i]["labels"]:
                     del WORLD.msgs[i]
+            WORLD.touch()
 
     # -- changes
 
@@ -158,6 +178,7 @@ class FakeMailbox:
                 if m.msgid in WORLD.msgs:
                     (WORLD.msgs[m.msgid]["flags"].add if on else WORLD.msgs[m.msgid]["flags"].discard)(flag)
                 (m.flags.add if on else m.flags.discard)(flag)
+            WORLD.touch()
 
     def change_labels(self, msgs: list[Msg], add=(), remove=()):
         return self.change_labels_by_id([m.msgid for m in msgs], add, remove)
@@ -169,6 +190,7 @@ class FakeMailbox:
                 if rec:
                     rec["labels"] |= set(add)
                     rec["labels"] -= set(remove)
+            WORLD.touch()
             return self.find(msgids)
 
     def find(self, msgids: list[int], role="all") -> list[Msg]:
@@ -182,12 +204,14 @@ class FakeMailbox:
             for m in msgs:
                 if m.msgid in WORLD.msgs:
                     WORLD.msgs[m.msgid]["trashed"] = True
+            WORLD.touch()
 
     def untrash(self, msgids: list[int], to_raw: str):
         with self.lock:
             for i in msgids:
                 if i in WORLD.msgs:
                     WORLD.msgs[i]["trashed"] = False
+            WORLD.touch()
 
     # -- labels
 
@@ -205,3 +229,33 @@ class FakeMailbox:
         WORLD.labels.remove(name)
         for r in WORLD.msgs.values():
             r["labels"].discard(name)
+
+
+class FakeWatcher:
+    """IMAP IDLE on the made-up inbox: on_change(kind) for every change to the world."""
+
+    def __init__(self, cfg, on_change, on_wake=None):
+        self.on_change = on_change
+        self.healthy = False
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="fake-idle", daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        with WORLD.changed:
+            WORLD.changed.notify_all()
+
+    def _loop(self):
+        with WORLD.changed:
+            WORLD.events.clear()
+        self.healthy = True
+        self.on_change("reconnected")
+        while not self._stop.is_set():
+            with WORLD.changed:
+                WORLD.changed.wait_for(lambda: WORLD.events or self._stop.is_set(), timeout=1)
+                kinds, WORLD.events[:] = list(WORLD.events), []
+            for kind in dict.fromkeys(kinds):
+                self.on_change(kind)

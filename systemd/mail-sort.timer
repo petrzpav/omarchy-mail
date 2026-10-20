@@ -2,9 +2,11 @@
 Description=Run the Jev mail sort every 5 minutes
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
+# Wall-clock ticks: they keep firing however late the user manager starts and across suspend
+# (OnBootSec missed a manager started after boot+2min, and then the timer never fired again).
+OnCalendar=*:0/5
 Persistent=true
+AccuracySec=30s
 
 [Install]
 WantedBy=timers.target

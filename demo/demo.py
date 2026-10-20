@@ -30,6 +30,8 @@ def setup():
     from mailtui import config, smtp, store
 
     store.Mailbox = fakegmail.FakeMailbox
+    store.Watcher = fakegmail.FakeWatcher
+    store.SORT_UNIT = None                            # never start the real sort service
     smtp.send = lambda cfg, ident, msg: None          # "sent"
 
     cfg = config.load()

@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Text of an open e-mail can be selected with the mouse and copied with Ctrl+C.
+- Ctrl+click opens a link in an open e-mail and in the message quoted under a reply or forward.
+- A Trello card or board link opens in the Trello client when it is installed.
+- New mail shows up the moment Gmail has it, its text already downloaded, and a reply that arrives in the conversation you're reading joins it folded, without moving the page.
+- With the sort timer on, Jev files new mail within seconds of its arrival while the client is open.
+
+### Changed
+
+- Archiving, moving, starring and marking read with the `mail` command, and Jev's sorting, show in the open client and in the bar's unread count at once.
+- Undo puts archived, moved and deleted conversations back on screen at once.
+- After a suspend or a network change the client reconnects at once, so the first action after it no longer hangs.
+- The client catches up with Gmail when its window gets the focus, and checks rarely while new mail is pushed to it.
+- Archiving or moving a long conversation reaches Gmail in one step instead of one per message.
+- `mail show` reads the messages the client has already downloaded from its cache.
+
+### Fixed
+
+- The Jev sort timer fires every five minutes again after a restart; run `systemctl --user restart mail-sort.timer` once after updating.
+- A conversation moved into a category shows in that tab at once, and an archived one in All Mail.
+- A conversation you've read stays read when you leave its tab and come back, and when you open it again.
+- After you send a reply, the conversation and its row show it within seconds.
+- A draft written with the `mail` command appears in the client's draft bar at once.
+- Without a connection, the client reports a failed refresh once, not every minute.
+- The sort timer and "Sort inbox with Jev now" never sort at the same time.
+
 ## [0.2.6] - 2026-10-07
 
 ### Security
@@ -75,6 +104,8 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Compact reply and forward, with the original message below; compose fills the terminal.
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
+[Unreleased]: https://github.com/petrzpav/omarchy-mail/compare/staging...dev
+[0.2.1]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
 [0.2.6]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.3...v0.2.4
