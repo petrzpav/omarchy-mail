@@ -1,15 +1,18 @@
 """Mail actions shared by the TUI and the CLI, each returning an undo record."""
 
+import fcntl
 import json
 import time
+from contextlib import contextmanager
 from itertools import groupby
 
 from . import jev, text
-from .config import STATE_DIR, Config
+from .config import STATE_DIR, Config, log_error
 from .imap import Folder, Mailbox, Msg
 
 SORT_LOG = STATE_DIR / "sort.log"
 SORT_SEEN = STATE_DIR / "seen"
+SORT_LOCK = STATE_DIR / "sort.lock"
 
 
 def _current_labels(msg: Msg, view: Folder | None) -> set[str]:
@@ -17,6 +20,15 @@ def _current_labels(msg: Msg, view: Folder | None) -> set[str]:
     if view and view.label and msg.folder == view.raw:
         labels.add(view.label)  # listed from that folder: Gmail hides the folder's own label
     return labels
+
+
+def _change(mbox: Mailbox, msgs: list[Msg], items: list[dict]):
+    """One Gmail change per distinct (added, removed) pair, not one per message."""
+    by_id = {m.msgid: m for m in msgs}
+    key = lambda i: (tuple(i["added"]), tuple(i["removed"]))
+    for (added, removed), group in groupby(sorted(items, key=key), key=key):
+        if added or removed:
+            mbox.change_labels([by_id[i["msgid"]] for i in group], add=list(added), remove=list(removed))
 
 
 def move(mbox: Mailbox, msgs: list[Msg], view: Folder | None, dst: str) -> dict:
@@ -27,7 +39,7 @@ def move(mbox: Mailbox, msgs: list[Msg], view: Folder | None, dst: str) -> dict:
         drop = {l for l in have if l == "\\Inbox" or (view and l == view.label)} - {dst}
         added = [dst] if dst not in have else []
         items.append({"msgid": m.msgid, "added": added, "removed": sorted(drop)})
-        mbox.change_labels([m], add=added, remove=sorted(drop))
+    _change(mbox, msgs, items)
     return {"kind": "labels", "items": items, "what": f"Moved to {dst}"}
 
 
@@ -36,7 +48,7 @@ def archive(mbox: Mailbox, msgs: list[Msg], view: Folder | None) -> dict:
     for m in msgs:
         drop = sorted({l for l in _current_labels(m, view) if l == "\\Inbox" or (view and l == view.label)})
         items.append({"msgid": m.msgid, "added": [], "removed": drop})
-        mbox.change_labels([m], remove=drop)
+    _change(mbox, msgs, items)
     return {"kind": "labels", "items": items, "what": "Archived"}
 
 
@@ -92,6 +104,29 @@ def _log(entry: dict):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+@contextmanager
+def sort_lock():
+    """Held while Jev sorts, so the timer and the client never sort (and rewrite `seen`) at once.
+    Yields False when another sort is running."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with SORT_LOCK.open("w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True
+
+
+def _reflect(rec: dict, msgs: list[Msg]):
+    """Show a sort move in the cached lists at once (the client repaints from them)."""
+    from . import store
+    try:
+        store.reflect(rec, msgs, what="sort")
+    except Exception:  # noqa: BLE001 - Gmail has the move; a cache hiccup must not stop the sort
+        log_error("sort reflect")
+
+
 def sort_inbox(cfg: Config, mbox: Mailbox, dry_run=False, limit=50, report=print) -> int:
     """Classify inbox mail Jev hasn't seen yet; move the confident ones. Returns moves made."""
     inbox = mbox.folder("inbox")
@@ -126,6 +161,7 @@ def sort_inbox(cfg: Config, mbox: Mailbox, dry_run=False, limit=50, report=print
         if act:
             entry["undo"] = rec
             moved += 1
+            _reflect(rec, [m])
         _log(entry)
         seen.add(m.msgid)
     if not dry_run:
@@ -176,6 +212,8 @@ def apply_rules(cfg: Config, mbox: Mailbox, dry_run=False, days=3, report=print)
                 mbox.change_labels([m], add=["\\Inbox"])
                 entry["undo"] = {"kind": "labels", "items": [{"msgid": m.msgid, "added": ["\\Inbox"], "removed": []}],
                                  "what": "Into Inbox"}
+            if act != "keep":
+                _reflect(entry["undo"], [m])
             acted += act != "keep"
             _log(entry)
             seen.add(m.msgid)

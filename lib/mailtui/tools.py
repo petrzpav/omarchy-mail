@@ -4,6 +4,9 @@ is the id of its first message, so either kind of id names a conversation.
 
 Reading prints compact text (or JSON with --json); every change acts on whole conversations,
 like the client, and saves an undo record that `mail undo` reverts.
+
+Reads always ask Gmail (bodies, which never change, may come from the client's cache);
+changes are written into the client's cache at once and announced to a running client.
 """
 
 import json
@@ -12,10 +15,10 @@ import sys
 from email.utils import getaddresses
 from pathlib import Path
 
-from . import drafts, ops, smtp, text
+from . import drafts, ops, smtp, store, text
 from .text import formataddr
-from .config import STATE_DIR, Config
-from .imap import Folder, ImapError, Mailbox, Msg
+from .config import CACHE_DIR, STATE_DIR, Config, log_error
+from .imap import Folder, ImapError, Mailbox, Msg, parse
 
 UNDO_FILE = STATE_DIR / "cli-undo.json"
 ROLES = ("inbox", "all", "sent", "trash", "spam", "drafts", "starred", "important")
@@ -125,8 +128,34 @@ def cmd_search(cfg: Config, args):
     _print_rows(_conversations(msgs, args.limit), args.json)
 
 
-def _message(mbox: Mailbox, m: Msg, full: bool, max_chars: int) -> dict:
-    parsed = mbox.fetch(m)
+def _bodies(mbox: Mailbox, msgs: list[Msg]) -> dict[int, bytes]:
+    """Raw messages by msgid: from the client's cache (a message never changes), the rest
+    from Gmail in one round trip per folder, and kept in the cache for next time."""
+    out, missing = {}, []
+    bodies = CACHE_DIR / "bodies"
+    for m in msgs:
+        try:
+            out[m.msgid] = (bodies / f"{m.msgid}.eml").read_bytes()
+        except OSError:
+            missing.append(m)
+    by_folder: dict[str, list[Msg]] = {}
+    for m in missing:
+        by_folder.setdefault(m.folder, []).append(m)
+    for folder, ms in by_folder.items():
+        got = mbox.fetch_raw_many(folder, [m.uid for m in ms])
+        for m in ms:
+            if m.uid in got:
+                out[m.msgid] = got[m.uid]
+                try:
+                    bodies.mkdir(parents=True, exist_ok=True)
+                    (bodies / f"{m.msgid}.eml").write_bytes(got[m.uid])
+                except OSError:
+                    pass
+    return out
+
+
+def _message(mbox: Mailbox, m: Msg, full: bool, max_chars: int, raw: bytes | None = None) -> dict:
+    parsed = parse(raw) if raw is not None else mbox.fetch(m)
     body, _ = text.body(parsed)
     quoted = ""
     if not full:
@@ -146,9 +175,13 @@ def cmd_show(cfg: Config, args):
     msgs = thread(mbox, args.id)
     if args.last:
         msgs = msgs[-args.last:]
-    out = [_message(mbox, m, args.full, args.max) for m in msgs]
+    raw = _bodies(mbox, msgs)
+    out = [_message(mbox, m, args.full, args.max, raw.get(m.msgid)) for m in msgs]
     if args.mark_read:
-        mbox.set_seen([m for m in msgs if not m.seen], True)
+        unread = [m for m in msgs if not m.seen]
+        if unread:
+            mbox.set_seen(unread, True)
+            _reflect(mbox, {"kind": "seen", "msgids": [m.msgid for m in unread], "on": True})
     mbox.close()
     if args.json:
         print(json.dumps(out, ensure_ascii=False))
@@ -199,6 +232,17 @@ def _save_undo(recs: list[dict]):
     UNDO_FILE.write_text(json.dumps(recs, ensure_ascii=False))
 
 
+def _reflect(mbox: Mailbox, rec: dict, msgs=()):
+    """Put a change into the client's cache at once and tell a running client; refresh the
+    bar's unread count. Gmail already has the change, so a failure here is only cosmetic."""
+    try:
+        store.reflect(rec, msgs, folders=mbox.folders(), what="cli")
+        store.save_unread(mbox.unseen(mbox.folder("inbox").raw))
+    except Exception:  # noqa: BLE001 - Gmail has the change; logged, the next sync heals the cache
+        log_error("cli reflect")
+        store.announce("cli")          # the client still re-syncs
+
+
 def cmd_change(cfg: Config, args):
     mbox = Mailbox(cfg)
     msgs = [m for i in args.ids for m in thread(mbox, i)]
@@ -221,6 +265,7 @@ def cmd_change(cfg: Config, args):
         recs.append(ops.trash(mbox, msgs, None))
     elif args.cmd in ("mark-read", "mark-unread"):
         mbox.set_seen(msgs, args.cmd == "mark-read")
+        _reflect(mbox, {"kind": "seen", "msgids": [m.msgid for m in msgs], "on": args.cmd == "mark-read"})
     elif args.cmd in ("star", "unstar"):
         newest = {}
         for m in msgs:
@@ -228,6 +273,8 @@ def cmd_change(cfg: Config, args):
         recs.append(ops.star(mbox, list(newest.values()) if args.cmd == "star" else msgs, args.cmd == "star"))
     if recs:
         _save_undo(recs)
+        for r in recs:
+            _reflect(mbox, r, msgs)
     mbox.close()
     print(f"{what}: {len(args.ids)} conversation(s), {len(msgs)} message(s)"
           + ("  (mail undo reverts)" if recs else ""))
@@ -241,6 +288,7 @@ def cmd_undo(cfg: Config, args):
     mbox = Mailbox(cfg)
     for r in reversed(recs):
         print(ops.undo(mbox, r))
+        _reflect(mbox, store.inverse(r))
     mbox.close()
     UNDO_FILE.unlink(missing_ok=True)
 
@@ -321,6 +369,7 @@ def cmd_draft(cfg: Config, args):
                               p.read_bytes())
     d.edited = True
     drafts.save(d)
+    store.announce("drafts")          # the client's draft bar shows it now
     drafts.sync_to_gmail(cfg, mbox, d)
     mbox.close()
     out = _draft_json(d)
@@ -369,6 +418,7 @@ def cmd_edit_draft(cfg: Config, args):
         d.body = _body_arg(args)
     d.edited = True
     drafts.save(d)
+    store.announce("drafts")
     mbox = Mailbox(cfg)
     drafts.sync_to_gmail(cfg, mbox, d)
     mbox.close()
@@ -385,6 +435,7 @@ def cmd_send(cfg: Config, args):
     except smtp.SendError as e:
         _die(f"not sent, kept as a draft: {e}")
     drafts.forget(d)
+    store.announce("sent")
     mbox = Mailbox(cfg)
     try:
         drafts.purge(mbox)
@@ -397,6 +448,7 @@ def cmd_send(cfg: Config, args):
 def cmd_discard(cfg: Config, args):
     d = _find_draft(args.draft)
     drafts.forget(d)
+    store.announce("drafts")
     mbox = Mailbox(cfg)
     drafts.purge(mbox)
     mbox.close()
