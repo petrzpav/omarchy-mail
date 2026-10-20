@@ -9,6 +9,19 @@ from pathlib import Path
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "petrzpav-mail"
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "petrzpav-mail"
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "petrzpav-mail"
+ERROR_LOG = STATE_DIR / "errors.log"
+
+
+def log_error(where: str):
+    """Append the exception being handled to errors.log (never raises)."""
+    import time
+    import traceback
+    try:
+        ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with ERROR_LOG.open("a") as f:
+            f.write(f"--- {time.strftime('%F %T')} {where}\n{traceback.format_exc()}\n")
+    except OSError:
+        pass
 
 DEFAULT_KEYS = {
     "goto": "ctrl+g",

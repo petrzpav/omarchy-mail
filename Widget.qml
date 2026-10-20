@@ -1,6 +1,6 @@
-// Envelope with the inbox unread count; click opens the mail client. The count comes from `mail unread`,
-// polled every two minutes; the client and `mail sort` also keep the cached
-// count fresh, so the first read after login is instant.
+// Envelope with the inbox unread count; click opens the mail client. The client, `mail sort` and
+// every `mail` command that changes mail rewrite the cached count, and the bar watches that file, so
+// it changes the moment they do; `mail unread` polled every two minutes covers the client being closed.
 
 import QtQuick
 import Quickshell
@@ -44,6 +44,21 @@ BarWidget {
         var n = parseInt(text.trim())
         root.failed = isNaN(n)
         if (!isNaN(n)) root.unread = n
+      }
+    }
+  }
+
+  FileView {
+    path: (Quickshell.env("XDG_CACHE_HOME") || Quickshell.env("HOME") + "/.cache") + "/petrzpav-mail/unread"
+    watchChanges: true
+    printErrors: false
+    // text() is stale inside the change signal, so both paths go through reload.
+    onFileChanged: reload()
+    onLoaded: {
+      var n = parseInt(text().trim())
+      if (!isNaN(n)) {        // a half-written file reads empty: keep the last count
+        root.unread = n
+        root.failed = false
       }
     }
   }

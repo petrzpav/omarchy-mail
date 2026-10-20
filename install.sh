@@ -80,6 +80,7 @@ for unit in mail-sort.service mail-sort.timer; do
     systemctl --user link "$root/systemd/$unit" >/dev/null
   fi
 done
+systemctl --user daemon-reload >/dev/null 2>&1 || true   # an update may have changed the linked units
 
 cat <<MSG
 Installed. Next:

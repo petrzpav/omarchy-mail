@@ -115,20 +115,29 @@ Jonas's email to watch the review sidebar while you write. Nothing is sent anywh
 | `mail cat ls\|add\|rm\|rename` | manage categories (creates/renames Gmail labels) |
 | `mail unread` | inbox unread count |
 
-Auto-sort: `systemctl --user enable --now mail-sort.timer`. Every decision is logged to
+Auto-sort: `systemctl --user enable --now mail-sort.timer`. While the client is open, new mail is
+sorted within seconds of arriving, not at the next five-minute tick. Every decision is logged to
 `~/.local/state/petrzpav-mail/sort.log`, and "Jev history" in the palette puts a message back.
+
+The client is local-first: it paints from its cache at once and keeps a connection idling in your
+Inbox (IMAP IDLE), so new mail shows up the moment Gmail has it, with its text already downloaded.
+What you do in the client, with the `mail` commands below or through Jev shows everywhere at once,
+the bar's unread count included.
 
 ## Reading
 
 Mail is grouped into Gmail conversations. Opening one switches to a focus mode: one centered
 column, the newest message open, older ones folded to a line (↑↓ move, Enter/Space open), quoted
 history folded under "··· earlier messages". Archive, move and delete act on the whole conversation.
+Tab walks the links and Enter opens one, or Ctrl+click it; Trello links open in the Trello client
+if it's installed. Drag the mouse to select text, `Ctrl+C` copies it.
 
 ## Writing
 
 Replies are sent from the address the message was sent to. In compose, `Alt+S` picks another
 From address, and To and Cc suggest people from your mail as you type (↑↓, Enter or Tab to take one).
 Drafts are saved as you type, locally and to Gmail's Drafts, so you can finish them on your phone.
+Ctrl+click opens a link in the message shown under a reply or forward.
 
 Sending goes through Gmail SMTP, which only accepts From addresses verified as "Send mail as" in
 Gmail settings. For any other address, give that identity `smtp = "host:port"` in config.toml and
@@ -144,7 +153,7 @@ Everything the client does also works from the shell, so scripts and AI agents c
 mail without the TUI: `mail folders`, `ls [FOLDER] [--unread]`, `search 'GMAIL QUERY'`, `show ID`,
 `attachments ID`, `archive|trash|move|label|mark-read|star … ID…`, `undo`, and
 `draft --reply|--reply-all|--forward ID` → `drafts --show` → `send` (a draft also lands in Gmail
-Drafts, so you can finish it on the phone). Lists take `--json`; see `mail -h`.
+Drafts, so you can finish it on the phone). Lists take `--json`; see `mail -h`. Their changes show in an open client right away.
 
 To let Claude Code use these commands, run `install.sh --skill`: it links `skill/` into
 `~/.claude/skills/mail`, so Claude knows them in every project (and drafts first, sending only

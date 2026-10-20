@@ -11,7 +11,7 @@ description: >
 # Mail (`mail` CLI)
 
 `mail` with no arguments opens the user's TUI client, so never run it bare. Always give it a subcommand.
-Every command talks to Gmail over IMAP directly. The client picks up changes on its next refresh.
+Every command talks to Gmail over IMAP directly, so what it reads is always current. Changes also show in the user's open client and the bar's unread count at once.
 
 ## Ids
 

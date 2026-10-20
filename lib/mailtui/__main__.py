@@ -12,25 +12,29 @@ def cmd_unread(cfg, args):
         print(cache.read_text().strip())
         return
     from .imap import Mailbox
+    from .store import save_unread
     mbox = Mailbox(cfg)
     n = mbox.unseen(mbox.folder("inbox").raw)
     mbox.close()
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cache.write_text(f"{n}\n")
+    save_unread(n)
     print(json.dumps({"unread": n}) if args.json else n)
 
 
 def cmd_sort(cfg, args):
     from . import ops
     from .imap import Mailbox
-    mbox = Mailbox(cfg)
-    r = ops.apply_rules(cfg, mbox, dry_run=args.dry_run)
-    n = ops.sort_inbox(cfg, mbox, dry_run=args.dry_run, limit=args.limit) + r
-    if not args.dry_run:
-        print(f"filed {n}")
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    (CACHE_DIR / "unread").write_text(f"{mbox.unseen(mbox.folder('inbox').raw)}\n")
-    mbox.close()
+    from .store import save_unread
+    with ops.sort_lock() as mine:
+        if not mine:
+            print("another sort is running")
+            return
+        mbox = Mailbox(cfg)
+        r = ops.apply_rules(cfg, mbox, dry_run=args.dry_run)
+        n = ops.sort_inbox(cfg, mbox, dry_run=args.dry_run, limit=args.limit) + r
+        if not args.dry_run:
+            print(f"filed {n}")
+        save_unread(mbox.unseen(mbox.folder("inbox").raw))
+        mbox.close()
 
 
 def cmd_cat(cfg, args):

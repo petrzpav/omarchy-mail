@@ -120,6 +120,7 @@ _QUOTE_START = re.compile(
 _LINK = re.compile(r"(?P<url>(?:https?://|www\.)[^\s<>\"')\]]+[^\s<>\"'),.;:!?\])])"
                    r"|(?P<mail>(?:mailto:)?[\w.+-]+@[\w-]+(?:\.[\w-]+)+)")
 LINK_STYLE = "underline bright_blue"
+SELECTION_STYLE = "black on blue"
 
 
 def linkify(s: str):
@@ -140,11 +141,16 @@ def linkify(s: str):
 
 class Links:
     """A renderable whose terminal hyperlinks can be walked with Tab: remembers the links
-    (and the line each starts on) from its last render and highlights the active one."""
+    (and the line each starts on) from its last render and highlights the active one.
+
+    Its text can also be selected with the mouse: every piece carries its offset (what Textual
+    reads to know where a drag starts and ends), the text of the last render is kept in `lines`
+    and the `selection` (a Textual Selection) is highlighted."""
 
     def __init__(self, renderable):
-        self.renderable, self.active = renderable, None
+        self.renderable, self.active, self.selection = renderable, None, None
         self.links: list[tuple[str, int]] = []   # (href, line)
+        self.lines: list[str] = []
 
     def __rich_measure__(self, console, options):
         from rich.measure import Measurement
@@ -154,9 +160,13 @@ class Links:
         from rich.style import Style
         from rich.segment import Segment
         links, line, last, gap = [], 0, None, True
-        mark = Style(reverse=True)
+        lines = [""]
+        mark, selected = Style(reverse=True), Style.parse(SELECTION_STYLE)
         for seg in console.render(self.renderable, options):
-            href = seg.style.link if seg.style and not seg.control else None
+            if seg.control:
+                yield seg
+                continue
+            href = seg.style.link if seg.style else None
             if href:
                 # One link may span several segments and lines; a new one starts after other text.
                 if gap or href != last:
@@ -166,9 +176,26 @@ class Links:
                     seg = Segment(seg.text, seg.style + mark)
             elif seg.text.strip():
                 gap = True
-            line += seg.text.count("\n")
-            yield seg
+            for n, part in enumerate(seg.text.split("\n")):
+                if n:
+                    yield Segment.line()
+                    line += 1
+                    lines.append("")
+                x = len(lines[-1])
+                lines[-1] += part
+                span = self.selection.get_span(line) if self.selection else None
+                if span:
+                    a, b = span[0] - x, (len(part) if span[1] == -1 else span[1] - x)
+                    cuts = sorted({0, max(0, min(a, len(part))), max(0, min(b, len(part))), len(part)})
+                else:
+                    cuts = [0, len(part)]
+                for a2, b2 in zip(cuts, cuts[1:]):
+                    style = (seg.style or Style()) + Style.from_meta({"offset": (x + a2, line)})
+                    if span and a <= a2 and b2 <= b:
+                        style += selected
+                    yield Segment(part[a2:b2], style)
         self.links = links
+        self.lines = [s.rstrip() for s in lines]
 
 
 def reflow(text: str) -> str:

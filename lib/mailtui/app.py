@@ -2,6 +2,7 @@
 
 import os
 import re
+import shutil
 import subprocess
 import time
 import unicodedata
@@ -14,7 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult, SystemCommand
 from textual.actions import SkipAction
 from textual.binding import Binding
@@ -28,13 +29,17 @@ from textual.widgets._collapsible import CollapsibleTitle
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
-from . import config, drafts, jev, ops, smtp, text
+from . import config, drafts, jev, ops, smtp, store as cache, text
 from .config import CACHE_DIR, Category, Config
 from .imap import Folder, Msg, parse
 from .store import Store
 from .text import formataddr
 
+TRELLO_LINK = re.compile(r"https?://(www\.)?trello\.com/[bc]/")
+
 PENDING_GRACE = 30  # seconds a local change still wins over what a sync reports
+POLL_PUSHED = 120   # with push working, a safety sync this often
+POLL_ALONE = 20     # without it (connection down), this often
 
 KEY_HELP = [
     "Moving around",
@@ -48,6 +53,8 @@ KEY_HELP = [
     ("↑ ↓", "previous / next message"),
     ("Enter / Space", "expand / collapse the message"),
     ("Tab / Shift+Tab  ·  Enter", "next / previous link  ·  open it"),
+    ("Ctrl+click", "open a link"),
+    ("drag  ·  Ctrl+C", "select text  ·  copy it"),
     "Sorting",
     ("{select}  ·  {select_all}", "select for bulk actions  ·  select all"),
     ("{move}", "move to category"),
@@ -340,7 +347,7 @@ class Compose(ModalScreen[str]):
                         head, said = quote_context(d.quote)
                         yield Static(("↪ " if d.forward else "↩ ") + head, classes="context-head", markup=False)
                         with VerticalScroll(id="context", can_focus=False):
-                            yield Static(said, markup=False)
+                            yield Body(text.Links(text.linkify(said)), markup=False)
                 # Jev's review, always open beside the text.
                 with VerticalScroll(id="jev-side", can_focus=False):
                     yield Static(self._review_text(None), id="review")
@@ -548,6 +555,7 @@ class Compose(ModalScreen[str]):
         def sent(address):
             app.notify(f"Sent from {address}", timeout=3)
             app.main.paint_drafts()
+            app.main.after_send(d)
 
         def failed(e):
             app.notify(f"Not sent, kept as a draft: {e}", severity="error", timeout=10)
@@ -679,6 +687,28 @@ class Messages(DataTable):
     pass
 
 
+class Body(Static):
+    """A message body in the reader or the message a reply quotes: its text can be selected
+    with the mouse (Ctrl+C copies) and Ctrl+click opens a link."""
+
+    def get_selection(self, selection):
+        if not isinstance(self.content, text.Links):
+            return super().get_selection(selection)
+        return selection.extract("\n".join(self.content.lines)), "\n"
+
+    def selection_updated(self, selection):
+        if not isinstance(self.content, text.Links):
+            return super().selection_updated(selection)
+        self.content.selection = selection
+        self.update(self.content, layout=False)   # drop Textual's cached render
+
+    def on_click(self, event: events.Click):
+        href = event.style.link if event.ctrl else None
+        if href:
+            event.stop()
+            self.app.main.open_href(href)
+
+
 class Reader(VerticalScroll):
     """Keys move instantly: Textual's scroll animation looks jerky in a terminal."""
 
@@ -717,6 +747,10 @@ class MainScreen(Screen):
         self.pending: dict[int, dict] = {}
         self.draft_refs: set[str] = set()  # Message-IDs that a local draft replies to
         self._link: tuple[Static, int] | None = None  # the link Tab walked to in the reader
+        self._last_sync = time.time()     # when a sync of the view was last asked for
+        self._push_timer = None
+        self._pushed: set[str] = set()    # push kinds waiting for the debounce
+        self._stamp = cache.changed_by()[0]   # last cache change made by someone else
 
     def compose(self) -> ComposeResult:
         yield TabBar(id="tabs")
@@ -767,7 +801,9 @@ class MainScreen(Screen):
             self._show_folders((folders, counts))
         self.store.submit("fg", lambda: self.store.fg.folders())   # log in the action lane early
         self.load_folders()
-        self.set_interval(60, self.poll)
+        self.set_interval(10, self.poll)
+        self.set_interval(1.5, self._watch_stamp)
+        self.store.watch(self.on_push)
         self.apply_layout()
         self.paint_drafts()
         self.store.submit("drafts", lambda: drafts.tidy(self.store.drafts_mbox))
@@ -778,10 +814,6 @@ class MainScreen(Screen):
         def report(e):
             self.notify(f"{prefix}{e}", severity="error", timeout=8)
         return report
-
-    def bg(self, fn, done=None, err_prefix=""):
-        """Background lane (sync, counts, prefetch)."""
-        self.store.submit("bg", fn, done, self.fail(err_prefix))
 
     def fg(self, fn, done=None, err_prefix="", on_error=None):
         """Action lane: what the user just asked for, in order, on its own connection."""
@@ -878,11 +910,11 @@ class MainScreen(Screen):
 
     def load_folders(self):
         def fetch():
-            folders = self.store.bg.folders(refresh=True)
-            counts = self.store.bg.unseen_all()
+            folders = self.store.sync.folders(refresh=True)
+            counts = self.store.sync.unseen_all()
             self.store.save_folders(folders, counts)
             return folders, counts
-        self.bg(fetch, self._show_folders, "Cannot reach Gmail: ")
+        self.store.submit("sync", fetch, self._show_folders, self.fail("Cannot reach Gmail: "))
 
     def _show_folders(self, res):
         folders, self.counts = res
@@ -921,15 +953,15 @@ class MainScreen(Screen):
 
     def refresh_counts(self):
         def fetch():
-            counts = self.store.bg.unseen_all()
-            folders = self.store.bg.folders()
+            counts = self.store.sync.unseen_all()
+            folders = self.store.sync.folders()
             self.store.save_folders(folders, counts)
             return counts
 
         def done(counts):
             self.counts = counts
             self._paint_counts()
-        self.store.submit("bg", fetch, done, latest="counts")
+        self.store.submit("sync", fetch, done, latest="counts")
 
     def bump_count(self, raw: str, delta: int):
         if raw in self.counts:
@@ -974,43 +1006,103 @@ class MainScreen(Screen):
         self.selected.clear()
         self._paint_tabs()
         cached = self.store.cached_list(view.raw)
+        if cached is not None:
+            cached = self._overlay(cached, 0, view.raw)     # local changes Gmail may not have yet
         self.show_messages(cached or [], keep_cursor and cached is not None)
         self.load_messages(keep_cursor=True)
 
-    def load_messages(self, keep_cursor=False):
-        """Sync the current view from Gmail in the background and repaint if it changed."""
+    def load_messages(self, keep_cursor=False, force=False):
+        """Sync the current view from Gmail in the background and repaint if it changed.
+        Unless forced, one STATUS round trip settles that nothing changed."""
         view, query = self.view, self.search_query
+        if view is None and not query:
+            return
+        self._last_sync = time.time()
 
         def fetch():
             started = time.time()
-            msgs = self.store.bg.search(query, limit=300) if query else \
-                self.store.bg.messages(view.raw, limit=300)
+            msgs = self.store.sync.search(query, limit=300) if query else \
+                self.store.messages(view.raw, limit=300, force=force)
             return started, msgs
 
         def done(res):
             started, msgs = res
-            msgs = self._overlay(msgs, started)
+            if msgs is None:
+                return                  # unchanged in Gmail
+            msgs = self._overlay(msgs, started, f"?{query}" if query else view.raw)
             if not query:
                 self.store.save_list(view.raw, msgs)
             if (view, query) != (self.view, self.search_query):
                 return  # the user moved on meanwhile
             if self._same(msgs):
                 return
+            old = {m.msgid for m in self.raw}
             self.show_messages(msgs, keep_cursor)
             if query and not msgs:
                 self.notify("Nothing found")
-        self.store.submit("bg", fetch, done, self.fail(), latest="view")
+            self._got_new([m for m in msgs if m.msgid not in old] if old else [])
+        self.store.submit("sync", fetch, done, self._sync_failed, latest="view")
         self.schedule_prefetch(delay=0.1)
 
-    def _overlay(self, msgs: list[Msg], started: float) -> list[Msg]:
-        """Re-apply local changes that this sync result may predate."""
+    def _sync_failed(self, e):
+        """A background sync that fails (offline) says so once, not on every retry."""
+        if time.time() - getattr(self, "_failed_at", 0) > 300:
+            self.notify(f"{e}", severity="error", timeout=8)
+        self._failed_at = time.time()
+
+    def _got_new(self, new: list[Msg]):
+        """Messages a sync just brought: their bodies and conversations download now, wherever the
+        cursor is, and a conversation open in the reader gets its new replies."""
+        if not new:
+            return
+        thrids = list(dict.fromkeys(m.thrid for m in new if m.thrid))
+
+        def job():
+            self.store.prefetch(new)
+            self.store.prefetch_threads(thrids, listed=new)
+        self.store.submit("bg", job, latest="prefetch-new")
+        c = self.current
+        if c and c.thrid and any(m.thrid == c.thrid for m in new) \
+                and {m.msgid for m in new if m.thrid == c.thrid} - {m.msgid for m in self.thread_msgs}:
+            self._refresh_thread()
+
+    def _refresh_thread(self):
+        """Fetch the open conversation again and merge it into the reader in place (new messages
+        come in folded, nothing moves or takes the focus)."""
+        c = self.current
+        if not c or not c.thrid:
+            return
+
+        def fetch():
+            # the sync lane: a new reply must not wait behind a 40-body prefetch on `bg`
+            full = self.store.sync.thread([c.thrid])
+            if full:
+                self.store.save_thread(c.thrid, full)
+                self.store.prefetch(full, mbox=self.store.sync)
+            return full
+
+        def done(full):
+            if self.current is c and full:
+                self.update_reader(full, follow=False)
+        self.store.submit("sync", fetch, done, latest="reader")
+
+    def _hidden(self, p: dict, raw: str | None) -> bool:
+        """A pending removal hides the message only where it was removed from (an archived one
+        still shows in All Mail, a moved one in its new category); a deleted one everywhere but Bin."""
+        where = p.get("hide")
+        if where == "*":
+            return not any(f.raw == raw and f.role == "trash" for f in self.views)
+        return bool(where) and where == raw
+
+    def _overlay(self, msgs: list[Msg], started: float, raw: str | None) -> list[Msg]:
+        """Re-apply local changes that this sync result (of folder `raw`, "?query" for a search) may predate."""
         out = []
         for m in msgs:
             p = self.pending.get(m.msgid)
-            if p and p["done"] is not None and p["done"] + PENDING_GRACE < started:
+            if p and p["done"] is not None and started and p["done"] + PENDING_GRACE < started:
                 del self.pending[m.msgid]   # Gmail had it well before this sync began
                 p = None
-            if p and p.get("hide"):
+            if p and self._hidden(p, raw):
                 continue
             if p and p.get("seen") is not None:
                 (m.flags.add if p["seen"] else m.flags.discard)("\\Seen")
@@ -1022,8 +1114,13 @@ class MainScreen(Screen):
     def _mark_pending(self, msgs: list[Msg], **change) -> list[int]:
         ids = [m.msgid for m in msgs]
         for i in ids:
-            self.pending[i] = {"hide": False, "seen": None, "flag": None, "done": None, **change}
+            self.pending[i] = {"hide": None, "seen": None, "flag": None, "done": None, **change}
         return ids
+
+    def _persist(self):
+        """Save the list as shown, so a tab switch or a restart paints it the same way."""
+        if self.view and not self.search_query:
+            self.store.save_list(self.view.raw, self.raw)
 
     def _settle(self, ids: list[int]):
         now = time.time()
@@ -1151,7 +1248,7 @@ class MainScreen(Screen):
         if window:
             def job():
                 self.store.prefetch(window)
-                self.store.prefetch_threads(thrids)
+                self.store.prefetch_threads(thrids, listed=window)
             self.store.submit("bg", job, latest="prefetch")
 
     # -- reader: the conversation, oldest first, every message collapsed to one line
@@ -1166,6 +1263,13 @@ class MainScreen(Screen):
         if full and c.thrid:
             # A cached draft is likely sent or discarded by now; the fetch below brings back live ones.
             full = [m for m in full if "\\Draft" not in m.labels] or None
+        if full and c.thrid:
+            # The list may know a reply the cached conversation doesn't yet: show it in the first paint.
+            have = {m.msgid for m in full}
+            in_all = not (self.view and not self.search_query and self.view.role in ("trash", "spam"))
+            extra = [m for m in c.msgs if in_all and m.msgid not in have and "\\Draft" not in m.labels]
+            full = sorted(full + extra,
+                          key=lambda m: (m.date.timestamp() if m.date else 0, m.uid))
         self.bodies = {}
         for m in (full or c.msgs):
             raw = self.store.cached_body(m)
@@ -1177,8 +1281,13 @@ class MainScreen(Screen):
             self.show_reader(c, None, loading=True)
         self.focus_pane("reader")
 
+        reading = {m.msgid for m in c.unread}    # marked read below; the saved copy must agree
+
         def fetch():
             full = self.mbox.thread([c.thrid]) or list(c.msgs)
+            for m in full:
+                if m.msgid in reading:
+                    m.flags.add("\\Seen")
             self.store.save_thread(c.thrid, full)
             missing = [m for m in full if self.store.cached_body(m) is None]
             if missing:
@@ -1209,8 +1318,13 @@ class MainScreen(Screen):
             if self.view:
                 self.bump_count(self.view.raw, -len(unread))
             ids = self._mark_pending(unread, seen=True)
-            self.fg(lambda: self.mbox.set_seen(unread, True),
-                    lambda _: (self._settle(ids), self.refresh_counts()))
+            self._persist()
+            views = list(self.views)
+
+            def mark():
+                self.mbox.set_seen(unread, True)
+                cache.reflect({"kind": "seen", "msgids": ids, "on": True}, folders=views)
+            self.fg(mark, lambda _: (self._settle(ids), self.refresh_counts()))
 
     def continue_gmail_draft(self, m: Msg):
         local = next((d for d in drafts.load_all() if d.gmail_msgid == m.msgid), None)
@@ -1246,8 +1360,9 @@ class MainScreen(Screen):
         if newest is not None:
             self.call_after_refresh(self._focus_message, newest, 25, True)
 
-    def update_reader(self, full: list[Msg]):
-        """Merge the full thread (sent replies, freshly downloaded bodies) into what is on screen."""
+    def update_reader(self, full: list[Msg], follow: bool | None = None):
+        """Merge the full thread (sent replies, freshly downloaded bodies) into what is on screen.
+        follow=False (a push while reading): new messages come in folded and nothing moves."""
         box = self.query_one("#thread", Vertical)
         for m in full:
             if m.msgid not in self.bodies:
@@ -1264,7 +1379,7 @@ class MainScreen(Screen):
                 del shown[msgid]
         old_newest = self.thread_msgs[-1].msgid if self.thread_msgs else None
         new_newest = full[-1].msgid if full else None
-        follow = getattr(self, "_follow_latest", False) and new_newest != old_newest
+        follow = follow is not False and getattr(self, "_follow_latest", False) and new_newest != old_newest
         for i, m in enumerate(full):
             w = shown.get(m.msgid)
             expand = (follow and m.msgid == new_newest) or (w is not None and not w.collapsed
@@ -1332,9 +1447,9 @@ class MainScreen(Screen):
             body = text.Links(Markdown(main))
         else:
             body = text.Links(text.linkify(text.reflow(main))) if main else "(empty)"
-        kids.append(Static(body, markup=False, classes="body"))
+        kids.append(Body(body, markup=False, classes="body"))
         if quoted:
-            kids.append(Collapsible(Static(text.Links(text.linkify(quoted)), markup=False, classes="history"),
+            kids.append(Collapsible(Body(text.Links(text.linkify(quoted)), markup=False, classes="history"),
                                     title="··· earlier messages", collapsed=True, classes="quoted",
                                     collapsed_symbol=" ", expanded_symbol=" "))
         dot = "•" if not m.seen else " "
@@ -1450,7 +1565,11 @@ class MainScreen(Screen):
         if self.focused_pane() != "reader" or not self._link:
             raise SkipAction()
         s, i = self._link
-        href = s.content.links[i][0]
+        self.open_href(s.content.links[i][0])
+
+    def open_href(self, href: str):
+        """Open a link from a message: mailto: in a new message, a Trello card or board in the Trello
+        client when it's installed, anything else in the browser."""
         if href.startswith("mailto:"):
             u = urlparse(href)
             q = parse_qs(u.query)
@@ -1458,8 +1577,10 @@ class MainScreen(Screen):
             self.open_compose(ident=ident, to=unquote(u.path), cc=",".join(q.get("cc", [])),
                               subject=q.get("subject", [""])[0], body=q.get("body", [""])[0])
             return
-        subprocess.Popen(["xdg-open", href], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
+        cmd = ["xdg-open", href]
+        if TRELLO_LINK.match(href) and shutil.which("trello"):
+            cmd = ["sh", "-c", 'trello open "$1" || xdg-open "$1"', "sh", href]
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         self.notify(f"Opened {href[:60]}", timeout=2)
 
     @on(OptionList.OptionSelected, ".attachments")
@@ -1519,41 +1640,117 @@ class MainScreen(Screen):
 
     def action_refresh(self):
         self.load_folders()
-        self.load_messages(keep_cursor=True)
+        self.load_messages(keep_cursor=True, force=True)
 
     def poll(self):
-        if self.app.screen is self:
-            self.refresh_counts()
-            if not self.selected:
-                self.load_messages(keep_cursor=True)
+        """A safety net under push: rare while the INBOX watcher is connected, frequent when not."""
+        every = POLL_PUSHED if self.store.watching() else POLL_ALONE
+        if time.time() - self._last_sync >= every:
+            self.kick()
+
+    def kick(self, force=False):
+        """Sync now: counts, and the view unless rows are selected (that sync waits for the next kick)."""
+        self._last_sync = time.time()
+        self.refresh_counts()
+        if not self.selected:
+            self.load_messages(keep_cursor=True, force=force)
+
+    def kick_if_stale(self, age: float = 5):
+        """Coming back to the window: catch up if the last sync is older than `age` seconds."""
+        if time.time() - self._last_sync > age:
+            self.kick()
+
+    def on_screen_resume(self):
+        self.kick_if_stale()
+
+    def on_push(self, kind: str):
+        """The INBOX watcher saw something: sync a moment later (changes come in bursts)."""
+        self._pushed.add(kind)
+        if self._push_timer:
+            self._push_timer.stop()
+        self._push_timer = self.set_timer(0.15, self._pushed_sync)
+
+    def _pushed_sync(self):
+        kinds, self._pushed = self._pushed, set()
+        if "new" in kinds:
+            cache.start_sort()        # Jev files it within seconds, not at the next timer tick
+        inbox = next((v for v in self.views if v.role == "inbox"), None)
+        here = bool(inbox and self.view and not self.search_query and self.view.raw == inbox.raw)
+        # New mail (or a gap while disconnected) forces a full read; a flag or expunge (often the
+        # echo of our own action) is settled by one STATUS round trip.
+        self.kick(force=here and bool(kinds & {"new", "reconnected"}))
+        if inbox and not here:
+            self._sync_cached(inbox)
+
+    def _sync_cached(self, folder: Folder):
+        """Bring a folder that isn't on screen up to date on disk, with the new mail's bodies,
+        so switching to it shows the fresh list and opens it at once."""
+        def job():
+            before = {m.msgid for m in self.store.cached_list(folder.raw) or []}
+            msgs = self.store.messages(folder.raw, limit=300)
+            if msgs is None:
+                return
+            self.store.save_list(folder.raw, msgs)
+            new = [m for m in msgs if m.msgid not in before]
+            if new and before:
+                self.store.submit("bg", lambda: (self.store.prefetch(new),
+                                                 self.store.prefetch_threads([m.thrid for m in new], listed=new)),
+                                  latest="prefetch-new")
+        self.store.submit("sync", job, latest=f"cached:{folder.raw}")
+
+    def _watch_stamp(self):
+        """The `mail` command (or Jev's sort) changed the cache: show it, then check with Gmail."""
+        mtime, pid = cache.changed_by()
+        if mtime == self._stamp:
+            return
+        self._stamp = mtime
+        if pid == os.getpid():
+            return
+        if self.view and not self.search_query and not self.selected:
+            cached = self.store.cached_list(self.view.raw)
+            if cached is not None:
+                cached = self._overlay(cached, 0, self.view.raw)
+                if not self._same(cached):
+                    self.show_messages(cached, keep_cursor=True)
+        self.paint_drafts()
+        self.kick(force=True)
 
     def action_help(self):
         self.app.push_screen(Help(self.keys))
 
     # -- actions: mail (applied on screen at once, sent to Gmail in order behind it)
 
-    def _apply(self, convs: list[Conv], fn, remove_rows=True):
+    def _apply(self, convs: list[Conv], fn, remove_rows=True, everywhere=False):
         """Act on whole conversations: shown at once, then every message of each thread
-        (incl. sent replies, looked up in All Mail) is changed in Gmail behind it."""
+        (incl. sent replies, looked up in All Mail) is changed in Gmail behind it, and in
+        every cached list. everywhere=True (Bin): gone from every view, not just this one."""
         if not convs:
             return
         ids = []
+        view_raw = self.view.raw if self.view and not self.search_query else None
         if remove_rows:
             members = self.members(convs)
             unread = sum(1 for m in members if not m.seen)
-            ids = self._mark_pending(members, hide=True)
+            here = view_raw or (f"?{self.search_query}" if self.search_query else None)
+            ids = self._mark_pending(members, hide="*" if everywhere else here)
             self.drop_rows(convs)
             if self.view and unread:
                 self.bump_count(self.view.raw, -unread)
+        views = list(self.views)
 
         def job():
             full = self.mbox.thread([c.thrid for c in convs])
             known = {m.thrid for m in full}
             full += [m for c in convs if c.thrid not in known for m in c.msgs]
-            return fn(full)
+            rec = fn(full)
+            cache.reflect(rec, full, folders=views)
+            rec["_msgs"] = full          # in memory only: what an undo puts back on screen
+            return rec
 
         def done(rec):
             self._settle(ids)
+            if remove_rows and view_raw:
+                rec["_rows"], rec["_view"] = convs, view_raw
             self.undo_stack.append(rec)
             n = len(convs)
             self.notify(f"{rec['what']} ({n} conversation{'s' if n != 1 else ''})  ·  "
@@ -1638,7 +1835,7 @@ class MainScreen(Screen):
             self.notify("Already in Bin", severity="warning")
             return
         view = self._view()
-        self._apply(convs, lambda full: ops.trash(self.mbox, full, view))
+        self._apply(convs, lambda full: ops.trash(self.mbox, full, view), everywhere=True)
 
     def action_undo(self):
         if not self.undo_stack:
@@ -1647,12 +1844,27 @@ class MainScreen(Screen):
         rec = self.undo_stack.pop()
         for i in rec.get("msgids") or [it["msgid"] for it in rec.get("items", [])]:
             self.pending.pop(i, None)
+        rows = rec.get("_rows")
+        if rows and self.view and not self.search_query and rec.get("_view") == self.view.raw:
+            # Put the rows back at once; Gmail follows behind.
+            have = {m.msgid for m in self.raw}
+            back = [m for c in rows for m in c.msgs if m.msgid not in have]
+            self.show_messages(sorted(self.raw + back, key=lambda m: (m.date.timestamp() if m.date else 0, m.uid),
+                                      reverse=True), keep_cursor=True)
+            self._persist()
+            self.bump_count(self.view.raw, sum(1 for m in back if not m.seen))
+        views = list(self.views)
+
+        def job():
+            msg = ops.undo(self.mbox, rec)
+            cache.reflect(cache.inverse(rec), rec.get("_msgs", ()), folders=views)
+            return msg
 
         def done(msg):
             self.notify(msg, timeout=3)
-            self.load_messages(keep_cursor=True)
+            self.load_messages(keep_cursor=True, force=True)
             self.refresh_counts()
-        self.fg(lambda: ops.undo(self.mbox, rec), done)
+        self.fg(job, done)
 
     def action_star(self):
         convs = self.targets()
@@ -1678,15 +1890,20 @@ class MainScreen(Screen):
                     m.flags.discard("\\Flagged")
             self._paint_reader_header()
         ids = self._mark_pending(changed, flag=on)
+        self._persist()
+        views = list(self.views)
 
         def job():
             if on:
                 # the message just marked on screen, so a later sync agrees with it
-                return ops.star(self.mbox, [m for m in changed], True)
-            full = self.mbox.thread([c.thrid for c in convs])
-            known = {m.thrid for m in full}
-            full += [m for c in convs if c.thrid not in known for m in c.msgs]
-            return ops.star(self.mbox, full, False)
+                rec = ops.star(self.mbox, [m for m in changed], True)
+            else:
+                full = self.mbox.thread([c.thrid for c in convs])
+                known = {m.thrid for m in full}
+                full += [m for c in convs if c.thrid not in known for m in c.msgs]
+                rec = ops.star(self.mbox, full, False)
+            cache.reflect(rec, folders=views)
+            return rec
 
         def done(rec):
             self._settle(ids)
@@ -1707,8 +1924,13 @@ class MainScreen(Screen):
         if self.view:
             self.bump_count(self.view.raw, -len(changed) if seen else len(changed))
         ids = self._mark_pending(changed, seen=seen)
-        self.fg(lambda: ops.set_read(self.mbox, changed, seen),
-                lambda _: (self._settle(ids), self.refresh_counts()))
+        self._persist()
+        views = list(self.views)
+
+        def job():
+            ops.set_read(self.mbox, changed, seen)
+            cache.reflect({"kind": "seen", "msgids": ids, "on": seen}, folders=views)
+        self.fg(job, lambda _: (self._settle(ids), self.refresh_counts()))
 
     def action_search(self):
         def got(q):
@@ -1731,17 +1953,24 @@ class MainScreen(Screen):
                                        (f"{e['choice']:<14}", "bold"), f"{e['subject'][:60]}"))
                 for i, e in enumerate(entries)]
 
+        views = list(self.views)
+
         def picked(i):
             if i is None:
                 return
             e = entries[int(i)]
 
+            def job():
+                msg = ops.undo(self.mbox, e["undo"])
+                cache.reflect(cache.inverse(e["undo"]), folders=views)
+                return msg
+
             def done(msg):
                 ops.mark_undone(e["msgid"])
                 self.notify(f"Back in Inbox: {e['subject'][:50]}")
-                self.load_messages(keep_cursor=True)
+                self.load_messages(keep_cursor=True, force=True)
                 self.refresh_counts()
-            self.fg(lambda: ops.undo(self.mbox, e["undo"]), done)
+            self.fg(job, done)
         self.app.push_screen(Picker("Jev moved these — Enter puts one back in Inbox", opts), picked)
 
     # -- compose
@@ -1754,9 +1983,21 @@ class MainScreen(Screen):
             self.paint_drafts()
             if result == "minimized":
                 self.notify(f"Draft saved · {pretty(self.keys['drafts'])} to continue", timeout=3)
-            if result in ("sent", "sending") and self.view and self.view.role in ("sent", "drafts"):
-                self.load_messages(keep_cursor=True)
         self.app.push_screen(Compose(self.cfg, self.keys, d, self.store), closed)
+
+    def after_send(self, d: drafts.Draft):
+        """Gmail files a sent message into Sent and its conversation a moment after SMTP is
+        done: look again shortly (and once more), so the row shows "me" and the reader the reply."""
+        refs = set(d.headers.get("In-Reply-To", "").split() + d.headers.get("References", "").split())
+        thrid = next((m.thrid for m in self.thread_msgs + self.raw if m.message_id and m.message_id in refs), 0)
+        cache.drop_thread(thrid)
+
+        def again():
+            self.kick(force=True)
+            if thrid and self.current and self.current.thrid == thrid:
+                self._refresh_thread()
+        self.set_timer(1.5, again)
+        self.set_timer(6, again)
 
     # -- drafts bar
 
@@ -2019,6 +2260,7 @@ class MailApp(App):
     /* The ANSI theme leaves selections the same colour as the background: make them visible. */
     TextArea > .text-area--selection { background: ansi_blue; color: ansi_black; text-style: none; }
     Input > .input--selection { background: ansi_blue; color: ansi_black; }
+    Screen > .screen--selection { background: ansi_blue; color: ansi_black; }
     """
 
     def __init__(self, cfg: Config, compose: str | None = None):
@@ -2085,17 +2327,28 @@ class MailApp(App):
         m = self.main
         lines = []
 
+        def sort():
+            with ops.sort_lock() as mine:
+                return ops.sort_inbox(self.cfg, self.store.sort_mbox, report=lines.append) if mine else None
+
         def done(n):
+            if n is None:
+                self.notify("Jev is sorting already")
+                return
             self.notify(f"Jev moved {n} message(s)" if n else "Jev: nothing to move")
-            m.load_messages(keep_cursor=True)
-            m.refresh_counts()
-        m.bg(lambda: ops.sort_inbox(self.cfg, self.store.bg, report=lines.append), done, "Jev: ")
+            m.kick(force=True)
+        self.store.submit("sort", sort, done, m.fail("Jev: "))
+
+    def on_app_focus(self, event):
+        if getattr(self, "main", None):
+            self.main.kick_if_stale()
 
     def _call_ui(self, fn, *args):
         try:
             self.call_from_thread(fn, *args)
-        except Exception:  # noqa: BLE001 - app already closing
-            pass
+        except Exception:  # noqa: BLE001 - app already closing, or a bug in a callback
+            if self.is_running:
+                config.log_error(f"ui callback {getattr(fn, '__qualname__', fn)}")
 
     def on_unmount(self):
         self.store.close()
