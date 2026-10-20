@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [Unreleased]
+
 ## [0.3.0-rc.1] - 2026-10-20
 
 ### Added
@@ -104,6 +106,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - Compact reply and forward, with the original message below; compose fills the terminal.
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
+[Unreleased]: https://github.com/petrzpav/omarchy-mail/compare/staging...dev
 [0.3.0-rc.1]: https://github.com/petrzpav/omarchy-mail/releases/tag/v0.2.6
 [0.2.1]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
 [0.2.6]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.5...v0.2.6
