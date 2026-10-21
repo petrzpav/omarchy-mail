@@ -97,7 +97,7 @@ inbox. Only Jev is real, so it needs `TYPESAFE_API_KEY` (in your environment or 
 ~/.config/omarchy/plugins/petrzpav.mail/demo/mail-demo
 ```
 
-Then try: `Ctrl+K` → "Sort inbox with Jev now", `Ctrl+J` on any message, and `Ctrl+R` on
+Then try: `Ctrl+P` `>` "Sort inbox with Jev now", `Ctrl+J` on any message, and `Ctrl+R` on
 Jonas's email to watch the review sidebar while you write. Nothing is sent anywhere.
 
 `demo/mail-demo record` drives the same demo headless and renders the video above to
@@ -108,7 +108,7 @@ Jonas's email to watch the review sidebar while you write. Nothing is sent anywh
 | | |
 |---|---|
 | `mail-window` | open the client in its own window (the bar widget does the same) |
-| `mail` | the client in the current terminal (`F1` lists every shortcut, `Ctrl+K` searches all actions) |
+| `mail` | the client in the current terminal (`F1` lists every shortcut, `Ctrl+P` goes to any folder or conversation, `>` there lists every action) |
 | `mail compose [mailto:…]` | write a new message |
 | `mail sort [--dry-run]` | let Jev file new inbox mail (only moves at ≥ threshold confidence) |
 | `mail backfill [--days N]` | let Jev label older mail (adds labels only) |
@@ -117,7 +117,7 @@ Jonas's email to watch the review sidebar while you write. Nothing is sent anywh
 
 Auto-sort: `systemctl --user enable --now mail-sort.timer`. While the client is open, new mail is
 sorted within seconds of arriving, not at the next five-minute tick. Every decision is logged to
-`~/.local/state/petrzpav-mail/sort.log`, and "Jev history" in the palette puts a message back.
+`~/.local/state/petrzpav-mail/sort.log`, and "Jev history" in `Ctrl+P` `>` puts a message back.
 
 The client is local-first: it paints from its cache at once and keeps a connection idling in your
 Inbox (IMAP IDLE), so new mail shows up the moment Gmail has it, with its text already downloaded.
@@ -127,7 +127,7 @@ the bar's unread count included.
 ## Reading
 
 Mail is grouped into Gmail conversations. Opening one switches to a focus mode: one centered
-column, the newest message open, older ones folded to a line (↑↓ move, Enter/Space open), quoted
+column, the newest message open, older ones folded to a line (↑↓ scroll and step between messages, Enter/Space open), quoted
 history folded under "··· earlier messages". Archive, move and delete act on the whole conversation.
 Tab walks the links and Enter opens one, or Ctrl+click it; Trello links open in the Trello client
 if it's installed. Drag the mouse to select text, `Ctrl+C` copies it.

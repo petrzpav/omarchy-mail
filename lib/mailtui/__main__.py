@@ -49,17 +49,21 @@ def cmd_cat(cfg, args):
         if cfg.category(args.name):
             sys.exit(f"{args.name} already exists")
         mbox.create_label(args.name)
-        cats.append(Category(args.name, args.description or ""))
+        config.edit_categories(lambda cats: [c for c in cats if c.name != args.name]
+                               + [Category(args.name, args.description or "")])
     elif args.action == "rm":
-        cats = [c for c in cats if c.name != args.name]
+        config.edit_categories(lambda cats: [c for c in cats if c.name != args.name])
         if args.delete_label:
             mbox.delete_label(args.name)
     elif args.action == "rename":
         mbox.rename_label(args.name, args.description)
-        for c in cats:
-            if c.name == args.name:
-                c.name = args.description
-    config.save_categories(cats)
+
+        def rename(cats):
+            for c in cats:
+                if c.name == args.name:
+                    c.name = args.description
+            return cats
+        config.edit_categories(rename)
     mbox.close()
 
 
