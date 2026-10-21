@@ -1,8 +1,10 @@
 """Load ~/.config/petrzpav-mail/{config.toml,categories.toml,secrets}."""
 
+import fcntl
 import os
 import re
 import tomllib
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,7 +26,6 @@ def log_error(where: str):
         pass
 
 DEFAULT_KEYS = {
-    "goto": "ctrl+g",
     "move": "ctrl+l",
     "jev": "ctrl+j",
     "archive": "ctrl+e",
@@ -43,7 +44,7 @@ DEFAULT_KEYS = {
     "rename_category": "f2",
     "refresh": "f5",
     "help": "f1",
-    "palette": "ctrl+k",
+    "palette": "ctrl+p",
     "send": "ctrl+s",
     "drafts": "ctrl+o",
     "discard": "alt+d",
@@ -182,4 +183,23 @@ def save_categories(categories: list[Category]) -> None:
         if c.keep_in_inbox:
             block += "\nkeep_in_inbox = true"
         parts.append(block)
-    path.write_text("\n\n".join(parts) + "\n")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("\n\n".join(parts) + "\n")
+    tmp.replace(path)          # the client reads it any time: never half-written
+
+
+@contextmanager
+def _categories_lock():
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_DIR / ".categories.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def edit_categories(change) -> list[Category]:
+    """Apply `change(categories) -> categories` to what categories.toml holds now (`mail cat`, the
+    client or a text editor may have changed it since it was read) and save. Returns the result."""
+    with _categories_lock():
+        cats = change(load_categories())
+        save_categories(cats)
+        return cats

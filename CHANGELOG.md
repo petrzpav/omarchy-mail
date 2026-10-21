@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-21
+
+### Fixed
+
+- A draft changed, sent or discarded with the `mail` command while it is open in the client shows up there, and closing it no longer overwrites the change or brings the draft back.
+- The arrow keys scroll through an open e-mail, and move to the previous or next one at its end.
+
+### Changed
+
+- Ctrl+P goes to any folder or conversation, and typing > lists every command. Ctrl+G is gone.
+
 ## [0.3.0] - 2026-10-20
 
 _Stable release based on [0.3.0-rc.1]._
@@ -111,6 +122,7 @@ _Stable release based on [0.3.0-rc.1]._
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
 [Unreleased]: https://github.com/petrzpav/omarchy-mail/compare/staging...dev
+[0.3.1]: https://github.com/petrzpav/omarchy-mail/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.6...v0.3.0
 [0.3.0-rc.1]: https://github.com/petrzpav/omarchy-mail/releases/tag/v0.2.6
 [0.2.1]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.0...v0.2.1
