@@ -6,7 +6,9 @@ import shutil
 import subprocess
 import time
 import unicodedata
+import uuid
 from datetime import datetime
+from pathlib import Path
 from email.message import EmailMessage
 from email.headerregistry import Address
 from email.utils import formatdate, getaddresses, make_msgid
@@ -16,7 +18,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 from textual import events, on, work
-from textual.app import App, ComposeResult, SystemCommand
+from textual.app import App, ComposeResult
 from textual.actions import SkipAction
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -45,12 +47,11 @@ KEY_HELP = [
     "Moving around",
     ("↑ ↓  PgUp PgDn  Home End", "move through the list"),
     ("← →", "previous / next tab (in the reader: back to the list)"),
-    ("{goto}", "go to any folder: Starred, Sent, Bin, All Mail …"),
+    ("{palette}", "go to a folder or a conversation; type > for every command"),
     ("Enter  ·  Esc", "open conversation  ·  go back"),
     ("{search}", "search, Gmail syntax: from:jan has:attachment"),
-    ("{palette}", "command palette (every action, incl. Jev history)"),
     "Reading",
-    ("↑ ↓", "previous / next message"),
+    ("↑ ↓", "scroll; past a message's end: previous / next message"),
     ("Enter / Space", "expand / collapse the message"),
     ("Tab / Shift+Tab  ·  Enter", "next / previous link  ·  open it"),
     ("Ctrl+click", "open a link"),
@@ -231,6 +232,99 @@ def fold(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", s.lower()) if not unicodedata.combining(c))
 
 
+def rank(items: list[dict], query: str, limit=80) -> list[dict]:
+    """items: {"text", "detail" (optional), "boost"}. Every word must appear; word starts and
+    earlier hits rank higher; with few hits, fuzzy matches fill in."""
+    q = fold(query).split()
+    if not q:
+        return items[:limit]
+    scored = []
+    for it in items:
+        f = fold(it["text"] + "  " + it.get("detail", ""))
+        score = it.get("boost", 0)
+        for w in q:
+            i = f.find(w)
+            if i < 0:
+                break
+            score += 10 - min(i, 9) * 0.5 + (5 if i == 0 or not f[i - 1].isalnum() else 0)
+        else:
+            scored.append((score, it))
+    if len(scored) < 15:
+        from textual.fuzzy import FuzzySearch
+        fz, have, qq = FuzzySearch(), {id(it) for _, it in scored}, fold(query)
+        for it in items:
+            if id(it) not in have and (s := fz.match(qq, fold(it["text"]))[0]) > 0:
+                scored.append((s / 10 + it.get("boost", 0) - 100, it))
+    scored.sort(key=lambda x: -x[0])
+    return [it for _, it in scored[:limit]]
+
+
+def highlight(s: str, query: str, style="") -> Text:
+    t, f = Text(s, style=style), fold(s)
+    for w in fold(query).split():
+        start = 0
+        while (i := f.find(w, start)) >= 0:
+            t.stylize("bold underline", i, i + len(w))
+            start = i + len(w)
+    return t
+
+
+class Palette(ModalScreen):
+    """Ctrl+P: type to search what `source(query)` returns, ↑↓ to choose, Enter to go."""
+
+    BINDINGS = [Binding("escape", "dismiss(None)", "Close"),
+                Binding("up", "move(-1)", show=False, priority=True),
+                Binding("down", "move(1)", show=False, priority=True),
+                Binding("pageup", "move(-10)", show=False, priority=True),
+                Binding("pagedown", "move(10)", show=False, priority=True)]
+
+    def __init__(self, title: str, source, placeholder="Type to search…"):
+        super().__init__()
+        self.title_text, self.source, self.placeholder = title, source, placeholder
+        self.items: list[dict] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog wide"):
+            yield Label(self.title_text, classes="dialog-title")
+            yield Input(placeholder=self.placeholder)
+            yield OptionList()
+
+    def on_mount(self):
+        self.refill("")
+
+    def refill(self, query: str):
+        ol = self.query_one(OptionList)
+        self.items = self.source(query)
+        opts = []
+        for i, it in enumerate(self.items):
+            t = it.get("prefix", Text()) + highlight(it["text"], query.lstrip(">"), it.get("style", ""))
+            if it.get("detail"):
+                t += Text("  " + it["detail"], style="dim")
+            t.no_wrap, t.overflow = True, "ellipsis"
+            opts.append(Option(t, id=str(i)))
+        ol.set_options(opts)
+        ol.highlighted = 0 if opts else None
+
+    @on(Input.Changed)
+    def _changed(self, event: Input.Changed):
+        self.refill(event.value)
+
+    def action_move(self, step: int):
+        ol = self.query_one(OptionList)
+        if ol.option_count:
+            ol.highlighted = max(0, min(ol.option_count - 1, (ol.highlighted or 0) + step))
+
+    @on(Input.Submitted)
+    def _submit(self):
+        ol = self.query_one(OptionList)
+        if ol.highlighted is not None and self.items:
+            self.dismiss(self.items[ol.highlighted])
+
+    @on(OptionList.OptionSelected)
+    def _picked(self, event: OptionList.OptionSelected):
+        self.dismiss(self.items[int(event.option.id)])
+
+
 class AddressInput(Input):
     """A To/Cc field that suggests addresses from the mail seen so far, for the part after the
     last comma. ↑↓ pick a suggestion, Enter or Tab takes it, Esc closes the list."""
@@ -291,12 +385,15 @@ class AddressInput(Input):
 class Compose(ModalScreen[str]):
     """Writing a message. Saved as you type (locally at once, to Gmail's Drafts every few
     seconds); Esc tucks it away as a draft, Alt+D throws it away, Ctrl+S sends.
-    Dismisses with "sent", "minimized", "discarded" or "empty"."""
+    The `mail` command (an AI agent) may change, send or discard the same draft meanwhile: its
+    changes show up here and merge with mine, and what's on screen never overwrites them.
+    Dismisses with "sent", "minimized", "discarded", "empty" or "gone"."""
 
     LOCAL_DELAY = 1.0     # seconds of quiet before saving locally
     GMAIL_EVERY = 15.0    # at most this often to Gmail while typing
     REVIEW_DELAY = 4.0    # seconds of quiet before Jev grades the message
     REVIEW_MIN = 20       # characters written before it's worth grading
+    OUTSIDE_EVERY = 1.0   # seconds between looks for changes made outside (the `mail` command)
 
     BINDINGS = [Binding("escape", "minimize", "Minimize")]
 
@@ -307,6 +404,11 @@ class Compose(ModalScreen[str]):
         self._reviewed = ""               # the body the shown grades are for
         self._last_gmail = 0.0
         self._ready = False
+        self._base = drafts.fields(draft)   # the saved version the screen is based on
+        self._merged = False                # an outside change came in (send waits for a look)
+        self._closing = False               # gone while a dialog was on top: close when back
+        self._lost = False                  # sent or discarded outside (send must not go on)
+        self._outside_timer = None
         self._bindings.bind(keys["send"], "send", description="Send", priority=True)
         self._bindings.bind(keys["discard"], "discard", description="Discard", priority=True)
         self._bindings.bind(keys["sender"], "sender", description="From", priority=True)
@@ -320,6 +422,7 @@ class Compose(ModalScreen[str]):
         if d.ident not in [v for _, v in idents]:
             idents.append((d.ident, d.ident))
         reply = bool(d.headers.get("In-Reply-To"))
+        self._idents = [v for _, v in idents]
         with Vertical(classes="compose"):
             yield Label(d.subject if reply and d.subject else "Forward" if d.forward else "New message",
                         classes="dialog-title", markup=False)
@@ -346,10 +449,10 @@ class Compose(ModalScreen[str]):
                     if d.quote:
                         head, said = quote_context(d.quote)
                         yield Static(("↪ " if d.forward else "↩ ") + head, classes="context-head", markup=False)
-                        with VerticalScroll(id="context", can_focus=False):
+                        with VerticalScroll(id="context"):
                             yield Body(text.Links(text.linkify(said)), markup=False)
                 # Jev's review, always open beside the text.
-                with VerticalScroll(id="jev-side", can_focus=False):
+                with VerticalScroll(id="jev-side"):
                     yield Static(self._review_text(None), id="review")
                     yield Static(("grades when you pause typing, or " if self.cfg.review_auto else "")
                                  + pretty(self.keys["review"]), id="review-status")
@@ -370,6 +473,11 @@ class Compose(ModalScreen[str]):
         if self.draft.to:
             self.query_one("#body", TextArea).move_cursor((0, 0))
         self.call_after_refresh(lambda: setattr(self, "_ready", True))
+        self._outside_timer = self.set_interval(self.OUTSIDE_EVERY, self._outside)
+
+    def on_screen_resume(self):
+        if self._closing:
+            self.dismiss("gone")
 
     # -- autosave
 
@@ -402,7 +510,7 @@ class Compose(ModalScreen[str]):
     @on(TextArea.Changed)
     @on(Select.Changed)
     def _changed(self, event):
-        if not self._ready:
+        if not self._ready and event is not None:
             return
         if self._local_timer:
             self._local_timer.stop()
@@ -414,11 +522,112 @@ class Compose(ModalScreen[str]):
                     self._review_timer.stop()
                 self._review_timer = self.set_timer(self.REVIEW_DELAY, lambda: self.action_review(quiet=True))
 
+    def _save(self) -> bool:
+        """Store what's on screen as the next revision, merging in whatever was saved outside
+        since. False when the draft is gone (sent or discarded outside) and this screen closed."""
+        for _ in range(5):
+            self._collect()
+            d = self.draft
+            if drafts.fields(d) == self._base:
+                return True            # nothing new: never rewrite the saved version
+            try:
+                drafts.save(d)
+            except drafts.Changed as e:
+                self._merge(e.draft)
+                continue
+            except drafts.Gone:
+                if not self._gone():
+                    return False
+                continue
+            self._base = drafts.fields(d)
+            return True
+        return True
+
+    def _outside(self):
+        """Show a change the `mail` command made to this draft, or close it once sent / discarded."""
+        d = self.draft
+        disk = drafts.load(d.id)
+        if disk is None:
+            if d.rev and self._gone():
+                self._changed(None)
+        elif disk.rev != d.rev:
+            self._merge(disk)
+        elif disk.gmail_msgid != d.gmail_msgid:
+            d.gmail_msgid, d.synced = disk.gmail_msgid, disk.synced
+
+    def _merge(self, disk: drafts.Draft):
+        """Take a newer saved version: each field I haven't touched since gets its text; a field
+        both of us changed keeps mine (and the next save stores it on top of theirs)."""
+        self._collect()
+        self._merged = True
+        d, base, theirs = self.draft, self._base, drafts.fields(disk)
+        mine, clash = drafts.fields(d), []
+        self._ready = False            # the widget updates below are not my typing
+        for k in drafts.FIELDS:
+            if mine[k] == base[k] and theirs[k] != mine[k]:
+                self._show_field(k, theirs[k])
+            elif mine[k] != base[k] and theirs[k] != base[k] and theirs[k] != mine[k]:
+                clash.append(k)
+        self.call_after_refresh(lambda: setattr(self, "_ready", True))
+        for k in ("quote", "headers", "attachments", "message_id", "gmail_msgid", "synced", "rev", "edited"):
+            setattr(d, k, getattr(disk, k))
+        self._collect()
+        self._base = theirs
+        if clash:
+            self.notify("The draft was also changed outside the client; your text was kept in "
+                        + ", ".join(clash), severity="warning", timeout=10)
+            self._changed(None)        # store mine on top of theirs
+        else:
+            self.notify("The draft was changed outside the client", timeout=3)
+            if drafts.fields(d) != theirs:
+                self._changed(None)
+
+    def _show_field(self, k: str, value: str):
+        if k == "body":
+            area = self.query_one("#body", TextArea)
+            row, col = area.cursor_location
+            area.load_text(value)
+            lines = value.split("\n")
+            row = min(row, len(lines) - 1)
+            area.move_cursor((row, min(col, len(lines[row]))))
+        elif k == "ident":
+            sel = self.query_one("#from", Select)
+            if value in self._idents:
+                sel.value = value
+        else:
+            self.query_one(f"#{k}", Input).value = value
+
+    def _gone(self) -> bool:
+        """Sent or discarded outside. Keep what I wrote since as a new draft, else close.
+        True when it was kept."""
+        self._collect()
+        self._lost = True
+        d = self.draft
+        if drafts.fields(d) == self._base:
+            self._stop_timers()
+            if self._outside_timer:
+                self._outside_timer.stop()
+            self.notify("This draft was sent or discarded outside the client", severity="warning", timeout=6)
+            if self is self.app.screen:
+                self.dismiss("gone")
+            else:
+                self._closing = True
+            return False
+        d.id, d.rev, d.synced, d.gmail_msgid = uuid.uuid4().hex, 0, 0, 0
+        d.message_id = make_msgid(domain=d.ident.split("@")[-1])
+        d.attachments = [a for a in d.attachments if Path(a["path"]).exists()]
+        self._base = dict.fromkeys(drafts.FIELDS)
+        self.notify("This draft was sent or discarded outside the client; "
+                    "what you wrote since stays here as a new draft", severity="warning", timeout=10)
+        return True
+
     def _save_local(self):
         self._collect()
         if self.draft.untouched:       # e.g. a reply's quote rendering: nothing typed yet
             return
-        drafts.save(self.draft)
+        before = self.draft.rev
+        if not self._save() or self.draft.rev == before:
+            return
         self.query_one("#compose-hint", Static).update(self._hint(f"saved {datetime.now():%H:%M}"))
         wait = self.GMAIL_EVERY - (time.time() - self._last_gmail)
         if self._gmail_timer:
@@ -515,13 +724,16 @@ class Compose(ModalScreen[str]):
             drafts.delete(self.draft)
             self.dismiss("empty")
             return
-        drafts.save(self.draft)
-        self._save_gmail()
+        before = self.draft.rev
+        if not self._save():
+            return
+        if self.draft.rev != before or self.draft.synced != self.draft.rev:
+            self._save_gmail()
         self.dismiss("minimized")
 
     def action_discard(self):
         def yes(ok):
-            if not ok:
+            if not ok or not self.is_attached:
                 return
             self._stop_timers()
             d = self.draft
@@ -539,9 +751,18 @@ class Compose(ModalScreen[str]):
         if not d.to:
             self.notify("Add a recipient", severity="warning")
             return
+        self._merged = self._lost = False
+        self._outside()                # what the `mail` command did a moment ago counts too
+        if self._lost or not self._save():     # kept until the send succeeds
+            return
+        if self._lost:
+            return
+        if self._merged:
+            self.notify("The draft was just changed outside the client: check it, then send again",
+                        severity="warning", timeout=8)
+            return
         self._stop_timers()
         d.edited = True
-        drafts.save(d)                 # kept until the send succeeds
         app, cfg, store = self.app, self.cfg, self.store
         ident = cfg.identity_for(d.ident)
         app.notify(f"Sending from {ident.email}…", timeout=2)
@@ -709,10 +930,26 @@ class Body(Static):
             self.app.main.open_href(href)
 
 
+class Attachments(OptionList):
+    """A message's attachments: ↑ ↓ past the first / last one carry on through the conversation."""
+
+    def action_cursor_up(self):
+        if not self.highlighted:
+            self.screen.action_step(-1)
+        else:
+            super().action_cursor_up()
+
+    def action_cursor_down(self):
+        if self.highlighted is None or self.highlighted >= self.option_count - 1:
+            self.screen.action_step(1)
+        else:
+            super().action_cursor_down()
+
+
 class Reader(VerticalScroll):
     """Keys move instantly: Textual's scroll animation looks jerky in a terminal."""
 
-    BINDINGS = [Binding("up", "screen.message(-1)", show=False), Binding("down", "screen.message(1)", show=False),
+    BINDINGS = [Binding("up", "screen.step(-1)", show=False), Binding("down", "screen.step(1)", show=False),
                 Binding("pagedown", "jump('page_down')", show=False), Binding("pageup", "jump('page_up')", show=False),
                 Binding("home", "jump('home')", show=False), Binding("end", "jump('end')", show=False),
                 Binding("tab", "screen.link(1)", show=False), Binding("shift+tab", "screen.link(-1)", show=False)]
@@ -728,7 +965,7 @@ class MainScreen(Screen):
         self.cfg, self.store = cfg, store
         self.mbox = store.fg      # user actions go through the foreground connection
         self.keys = cfg.keys
-        self.views: list[Folder] = []     # every folder, for Ctrl+G
+        self.views: list[Folder] = []     # every folder, for Ctrl+P
         self.tab_views: list[Folder] = []  # Inbox + categories
         self.view: Folder | None = None
         self.search_query: str | None = None
@@ -750,7 +987,8 @@ class MainScreen(Screen):
         self._last_sync = time.time()     # when a sync of the view was last asked for
         self._push_timer = None
         self._pushed: set[str] = set()    # push kinds waiting for the debounce
-        self._stamp = cache.changed_by()[0]   # last cache change made by someone else
+        self._cats_mtime = None
+        self._stamp = cache.changes_since(0)[0]   # how far the cache's change notes are read
 
     def compose(self) -> ComposeResult:
         yield TabBar(id="tabs")
@@ -769,7 +1007,7 @@ class MainScreen(Screen):
         for key, action, desc, show in [
             ("left", "pane(-1)", "", False), ("right", "pane(1)", "", False),
             ("escape", "back", "Back", False), ("enter", "open_link", "", False),
-            (k["goto"], "goto", "Go to", True),
+            (k["palette"], "palette", "Go to", True),
             (k["drafts"], "drafts", "Drafts", False),
             (k["select"], "select", "Select", False), (k["select_all"], "select_all", "Select all", False),
             (k["move"], "move", "Move", True), (k["jev"], "jev", "Jev", True),
@@ -895,7 +1133,7 @@ class MainScreen(Screen):
             hint.update(t)
             return
         k = {n: pretty(v) for n, v in self.keys.items()}
-        hint.update(f"Esc back   ↑↓ messages   Enter open   Tab links   {k['reply']} reply   {k['forward']} forward   "
+        hint.update(f"Esc back   ↑↓ scroll   Enter open   Tab links   {k['reply']} reply   {k['forward']} forward   "
                     f"{k['archive']} archive   {k['star']} star   {k['move']} move   Del delete")
 
     def on_descendant_focus(self, event):
@@ -936,7 +1174,7 @@ class MainScreen(Screen):
     def _tab_list(self) -> list[Folder]:
         tabs = list(self.tab_views)
         if self.view and all(t.raw != self.view.raw for t in tabs):
-            tabs.append(self.view)       # Sent, Bin, … opened via Ctrl+G
+            tabs.append(self.view)       # Sent, Bin, … opened via Ctrl+P
         return tabs
 
     def _paint_tabs(self):
@@ -946,7 +1184,7 @@ class MainScreen(Screen):
         if self.search_query:
             items.append((f"🔍 {self.search_query}", 0))
             cur = len(items) - 1
-        self.query_one(TabBar).set_tabs(items, cur, f"←→ tabs  {pretty(self.keys['goto'])} more")
+        self.query_one(TabBar).set_tabs(items, cur, f"←→ tabs  {pretty(self.keys['palette'])} go to")
 
     def _paint_counts(self):
         self._paint_tabs()
@@ -986,18 +1224,45 @@ class MainScreen(Screen):
         if 0 <= nxt < len(tabs):
             self.open_view(tabs[nxt])
 
-    def action_goto(self):
-        opts = []
+    def action_palette(self):
+        """Go to a folder or a conversation of this list, search all mail, or (after ">") run a command."""
+        folders = []
         for f in self.views:
             n = self._count(f)
-            opts.append((f.raw, Text.assemble((f"{f.name:<20}", "bold" if n else ""), (str(n or ""), "bold"))))
+            folders.append({"text": f.name, "detail": str(n) if n else "", "kind": "folder", "id": f.raw,
+                            "style": "bold" if n else "", "boost": 3})
+        convs = [{"text": c.subject or "(no subject)", "detail": f"{c.sender}  ·  {short_date(c.date)}",
+                  "kind": "conv", "id": c.msgid, "style": "" if c.seen else "bold"} for c in self.msgs]
+        cmds = [{"text": name, "detail": help_, "kind": "cmd", "id": fn, "prefix": Text("> ", style="dim")}
+                for name, fn, help_ in self.app.commands()]
 
-        def picked(raw):
-            f = next((f for f in self.views if f.raw == raw), None)
-            if f:
-                self.open_view(f)
-                self.focus_pane("list")
-        self.app.push_screen(Picker("Go to", opts), picked)
+        def source(q):
+            if q.startswith(">"):
+                return rank(cmds, q[1:])
+            if not q.strip():
+                return folders + convs
+            return rank(folders + convs, q) + [{"text": f"Search all mail for “{q.strip()}”", "kind": "search",
+                                                 "id": q.strip(), "prefix": Text("⌕ ", style="dim")}]
+
+        def chosen(it):
+            if not it:
+                return
+            if it["kind"] == "folder":
+                f = next((f for f in self.views if f.raw == it["id"]), None)
+                if f:
+                    self.open_view(f)
+                    self.focus_pane("list")
+            elif it["kind"] == "conv":
+                i = next((i for i, c in enumerate(self.msgs) if c.msgid == it["id"]), None)
+                if i is not None:
+                    self.query_one(Messages).move_cursor(row=i)
+                    self.open_message(self.msgs[i])
+            elif it["kind"] == "search":
+                self.search(it["id"])
+            else:
+                self.call_later(it["id"])
+        self.app.push_screen(Palette("Go to a folder or conversation  ·  “>” for commands", source,
+                                     "Folder, subject or sender… (> for commands)"), chosen)
 
     # -- message list
 
@@ -1327,9 +1592,20 @@ class MainScreen(Screen):
             self.fg(mark, lambda _: (self._settle(ids), self.refresh_counts()))
 
     def continue_gmail_draft(self, m: Msg):
-        local = next((d for d in drafts.load_all() if d.gmail_msgid == m.msgid), None)
-        if local:
-            self.open_draft(local)
+        local = next((d for d in drafts.load_all()
+                      if d.gmail_msgid == m.msgid or (m.message_id and d.message_id == m.message_id)), None)
+        # X-GM-MSGIDs only grow: a lower one is an older copy, not an edit made on the phone.
+        if local and (m.msgid <= local.gmail_msgid or local.synced != local.rev):
+            self.open_draft(local)     # the same version, or mine has changes Gmail hasn't got yet
+            return
+        if local:                      # changed on the phone since: continue with that version
+            def adopt(parsed):
+                self.open_draft(drafts.adopt(self.cfg, local, m, parsed))
+            raw = self.store.cached_body(m)
+            if raw is not None:
+                adopt(parse(raw))
+            else:
+                self.fg(lambda: self.mbox.fetch(m), adopt)
             return
         raw = self.store.cached_body(m)
         if raw is not None:
@@ -1440,7 +1716,7 @@ class MainScreen(Screen):
         parts = text.attachments(parsed) if parsed else []
         kids = [Static(meta, classes="meta")]
         if parts:
-            kids.append(OptionList(*[Option(f"📎 {text.attachment_name(p)}  "
+            kids.append(Attachments(*[Option(f"📎 {text.attachment_name(p)}  "
                                             f"{len(p.get_payload(decode=True) or b'') // 1024} kB", id=str(i))
                                      for i, p in enumerate(parts)], classes="attachments"))
         if is_md and main:
@@ -1497,14 +1773,52 @@ class MainScreen(Screen):
                 return w.msg
         return None
 
+    STEP = 2   # lines per ↑ ↓ inside a long message
+
+    def _span(self, w) -> tuple[int, int]:
+        """Where `w` lies on the reader's whole page, scrolled out parts included: (top, bottom)."""
+        reader = self.query_one(Reader)
+        y, node = w.virtual_region.y, w.parent
+        while node is not None and node is not reader:
+            y += node.virtual_region.y + node.styles.gutter.top   # children sit inside its padding
+            node = node.parent
+        return y, y + w.virtual_region.height
+
+    def action_step(self, step: int):
+        """↑ ↓ in the reader: scroll through the open message; at its edge go to the previous / next one."""
+        reader = self.query_one(Reader)
+        self._follow_latest = False
+        w = next((w for w in self._message_widgets() if w.has_focus_within), None)
+        if w is not None and not w.collapsed:
+            top, bottom = self._span(w)
+            view_top = round(reader.scroll_y)
+            view_bottom = view_top + reader.scrollable_content_region.height
+            if step > 0 and bottom > view_bottom and reader.scroll_y < reader.max_scroll_y:
+                reader.scroll_relative(y=min(self.STEP, bottom - view_bottom), animate=False)
+                return
+            if step < 0 and top < view_top and reader.scroll_y > 0:
+                reader.scroll_relative(y=-min(self.STEP, view_top - top), animate=False)
+                return
+        ws = self._message_widgets()
+        if w is not None and w is (ws[0] if step < 0 else ws[-1]):
+            reader.scroll_relative(y=step * self.STEP, animate=False)   # the headers above, the margin below
+            return
+        self.action_message(step)
+
     def action_message(self, step: int):
-        """↑ ↓ in the reader: previous / next message of the conversation."""
+        """Previous / next message of the conversation."""
         ws = self._message_widgets()
         if not ws:
             return
         self._follow_latest = False
         cur = next((i for i, w in enumerate(ws) if w.has_focus_within), len(ws) - 1)
-        self._focus_message(ws[max(0, min(len(ws) - 1, cur + step))].msg.msgid)
+        to = ws[max(0, min(len(ws) - 1, cur + step))]
+        self._focus_message(to.msg.msgid)
+        reader = self.query_one(Reader)
+        height = reader.scrollable_content_region.height
+        if step < 0 and to is not ws[cur] and not to.collapsed and to.virtual_region.height > height:
+            # Reading upwards into a long message: carry on from its end, not its top.
+            reader.scroll_to(y=self._span(to)[1] - height, animate=False)
 
     def action_toggle_message(self):
         """Space: open/close whatever is focused (a message, or its folded earlier messages)."""
@@ -1698,13 +2012,31 @@ class MainScreen(Screen):
                                   latest="prefetch-new")
         self.store.submit("sync", job, latest=f"cached:{folder.raw}")
 
+    def _categories_changed(self):
+        """categories.toml edited outside (`mail cat`, by hand): show its tabs."""
+        try:
+            mtime = (config.CONFIG_DIR / "categories.toml").stat().st_mtime
+        except OSError:
+            return
+        if self._cats_mtime is None:
+            self._cats_mtime = mtime
+        elif mtime != self._cats_mtime:
+            self._cats_mtime = mtime
+            try:
+                self.cfg.categories = config.load_categories()
+            except (ValueError, TypeError) as e:   # a typo while editing it by hand
+                self.notify(f"categories.toml: {e}", severity="error", timeout=8)
+                return
+            self.load_folders()
+
     def _watch_stamp(self):
         """The `mail` command (or Jev's sort) changed the cache: show it, then check with Gmail."""
-        mtime, pid = cache.changed_by()
-        if mtime == self._stamp:
+        self._categories_changed()
+        pos, others = cache.changes_since(self._stamp)
+        if pos == self._stamp:
             return
-        self._stamp = mtime
-        if pid == os.getpid():
+        self._stamp = pos
+        if not others:
             return
         if self.view and not self.search_query and not self.selected:
             cached = self.store.cached_list(self.view.raw)
@@ -1932,15 +2264,18 @@ class MainScreen(Screen):
             cache.reflect({"kind": "seen", "msgids": ids, "on": seen}, folders=views)
         self.fg(job, lambda _: (self._settle(ids), self.refresh_counts()))
 
+    def search(self, q: str):
+        self.search_query = q
+        self.selected.clear()
+        self._paint_tabs()
+        self.show_messages([])
+        self.load_messages()
+        self.query_one(Messages).focus()
+
     def action_search(self):
         def got(q):
             if q:
-                self.search_query = q
-                self.selected.clear()
-                self._paint_tabs()
-                self.show_messages([])
-                self.load_messages()
-                self.query_one(Messages).focus()
+                self.search(q)
         self.app.push_screen(Ask("Search all mail", self.search_query or "",
                                  "from:jan has:attachment newer_than:30d to:me@example.com"), got)
 
@@ -2129,8 +2464,8 @@ class MainScreen(Screen):
             def got_desc(desc):
                 def create():
                     self.mbox.create_label(name)
-                    self.cfg.categories.append(Category(name, desc or ""))
-                    config.save_categories(self.cfg.categories)
+                    self.cfg.categories = config.edit_categories(
+                        lambda cats: [c for c in cats if c.name != name] + [Category(name, desc or "")])
 
                 def done(_):
                     self.notify(f"Category {name} added (Gmail label created)")
@@ -2158,8 +2493,13 @@ class MainScreen(Screen):
             def got_desc(desc):
                 def go():
                     self.mbox.rename_label(cat.name, new)
-                    cat.name, cat.description = new, desc if desc is not None else cat.description
-                    config.save_categories(self.cfg.categories)
+
+                    def rename(cats):
+                        for c in cats:
+                            if c.name == cat.name:
+                                c.name, c.description = new, desc if desc is not None else c.description
+                        return cats
+                    self.cfg.categories = config.edit_categories(rename)
 
                 def done(_):
                     self.notify(f"Renamed to {new}")
@@ -2180,8 +2520,7 @@ class MainScreen(Screen):
                 return
 
             def go():
-                self.cfg.categories = [c for c in self.cfg.categories if c.name != cat.name]
-                config.save_categories(self.cfg.categories)
+                self.cfg.categories = config.edit_categories(lambda cats: [c for c in cats if c.name != cat.name])
                 self.mbox.delete_label(cat.name)
 
             def done(_):
@@ -2196,6 +2535,8 @@ class MainScreen(Screen):
 # ------------------------------------------------------------ app
 
 class MailApp(App):
+    ENABLE_COMMAND_PALETTE = False     # Ctrl+P is the client's own go-to (MainScreen.action_palette)
+
     TITLE = "Mail"
     PAUSE_GC_ON_SCROLL = True
     CSS = """
@@ -2268,7 +2609,6 @@ class MailApp(App):
         self.cfg, self.compose_url = cfg, compose
         self.store = Store(cfg, self._call_ui)
         self.mbox = self.store.fg
-        self.COMMAND_PALETTE_BINDING = cfg.keys.get("palette", "ctrl+k")
 
     def on_mount(self):
         self.theme = "ansi-dark"
@@ -2295,11 +2635,12 @@ class MailApp(App):
                        body=q.get("body", [""])[0])
         self.push_screen(Compose(self.cfg, self.cfg.keys, d, self.store), closed)
 
-    def get_system_commands(self, screen):
+    def commands(self) -> list[tuple[str, object, str]]:
+        """What Ctrl+P lists after ">": (name, function, description)."""
         m = self.main
-        yield SystemCommand("Jev history", "Recent automatic moves; put one back", m.jev_history)
-        yield SystemCommand("Sort inbox with Jev now", "Run the auto-sort once", self.sort_now)
-        for name, action, help_ in [
+        return [
+            ("Jev history", m.jev_history, "Recent automatic moves; put one back"),
+            ("Sort inbox with Jev now", self.sort_now, "Run the auto-sort once"),
             ("Move to category", m.action_move, "File the message under a category"),
             ("Ask Jev", m.action_jev, "Suggest a category"),
             ("Archive", m.action_archive, "Remove from Inbox / category"),
@@ -2313,15 +2654,13 @@ class MailApp(App):
             ("Reply", m.action_reply, ""),
             ("Reply all", m.action_reply_all, ""),
             ("Forward", m.action_forward, ""),
-            ("Go to folder", m.action_goto, "Starred, Sent, Bin, All Mail …"),
             ("Add category", m.action_add_category, "Creates the Gmail label"),
             ("Remove category", m.remove_category, "Deletes the current tab's Gmail label; mail stays in All Mail"),
             ("Rename category", m.action_rename_category, ""),
             ("Refresh", m.action_refresh, ""),
             ("Keyboard shortcuts", m.action_help, ""),
-        ]:
-            yield SystemCommand(name, help_, action)
-        yield SystemCommand("Quit", "Close the mail client", self.exit)
+            ("Quit", self.exit, "Close the mail client"),
+        ]
 
     def sort_now(self):
         m = self.main

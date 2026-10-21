@@ -35,7 +35,7 @@ from .imap import Folder, Mailbox, Msg, Watcher
 STATE_LOG = STATE_DIR / "errors.log"
 BODY_LIMIT = 600_000      # don't prefetch bodies bigger than this
 BODY_KEEP = 3000          # bodies kept on disk
-CHANGED = CACHE_DIR / "changed"       # "<pid> <what>", rewritten after every change to the cache
+CHANGED = CACHE_DIR / "changed"       # "<pid> <what>" lines, one appended after every change to the cache
 SORT_UNIT = "mail-sort.service"       # started on new mail when the user enabled the sort timer
 ROBOT = re.compile(r"no-?reply|do-?not-?reply|unsubscribe|mailer-daemon|bounce|^notifications?@", re.I)
 
@@ -102,21 +102,29 @@ def save_unread(n: int):
 
 
 def announce(what: str = ""):
-    """Tell a running client (and the next start) that the cache changed under it."""
+    """Tell a running client (and the next start) that the cache changed under it. Appended, so
+    a client's own change right after can't hide someone else's from it."""
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        CHANGED.write_text(f"{os.getpid()} {what}\n")
+        with open(CHANGED, "a") as f:
+            if f.tell() > 64_000:
+                f.truncate(0)
+            f.write(f"{os.getpid()} {what}\n")
     except OSError:
         pass
 
 
-def changed_by() -> tuple[float, int]:
-    """(mtime, pid) of the last announce(), (0, 0) if none."""
+def changes_since(pos: int) -> tuple[int, bool]:
+    """(where the announcements end now, whether another process made one after `pos`)."""
     try:
-        st = CHANGED.stat()
-        return st.st_mtime, int(CHANGED.read_text().split()[0])
-    except (OSError, ValueError, IndexError):
-        return 0.0, 0
+        data = CHANGED.read_bytes()
+    except OSError:
+        return 0, False
+    if len(data) < pos:          # cut short meanwhile: someone's note may be lost, so assume one
+        return len(data), True
+    me = str(os.getpid())
+    return len(data), any(line.split()[0] != me for line in data[pos:].decode(errors="replace").splitlines()
+                          if line.strip())
 
 
 def inverse(rec: dict) -> dict:

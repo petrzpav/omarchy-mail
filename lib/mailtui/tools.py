@@ -410,15 +410,25 @@ def cmd_drafts(cfg: Config, args):
 
 
 def cmd_edit_draft(cfg: Config, args):
-    d = _find_draft(args.draft)
-    for k in ("to", "cc", "subject"):
-        if getattr(args, k) is not None:
-            setattr(d, k, getattr(args, k))
-    if args.body is not None or args.body_file:
-        d.body = _body_arg(args)
-    d.edited = True
-    drafts.save(d)
-    store.announce("drafts")
+    body = _body_arg(args) if args.body is not None or args.body_file else None
+    for _ in range(5):
+        d = _find_draft(args.draft)
+        for k in ("to", "cc", "subject"):
+            if getattr(args, k) is not None:
+                setattr(d, k, getattr(args, k))
+        if body is not None:
+            d.body = body
+        d.edited = True
+        try:
+            drafts.save(d)
+            break
+        except drafts.Changed:
+            continue             # the client saved it a moment ago: apply the edit on top of that
+        except drafts.Gone:
+            _die(f"draft {d.id} was sent or discarded meanwhile")
+    else:
+        _die(f"draft {d.id} keeps changing; try again")
+    store.announce("drafts")     # an open compose window shows the change
     mbox = Mailbox(cfg)
     drafts.sync_to_gmail(cfg, mbox, d)
     mbox.close()

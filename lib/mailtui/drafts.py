@@ -4,13 +4,19 @@ A draft keeps one Message-ID for its whole life; every Gmail save appends the ne
 removes the previous one, the way Gmail's own clients do. A sent or discarded draft is written
 to GONE_FILE until Gmail confirms its copies are deleted, so closing the window mid-way leaves
 nothing behind: `tidy` finishes the job on the next start.
+
+The client and the `mail` command (an AI agent) both write drafts. Every save is a new revision
+and only goes through on top of the revision it was made from (`Changed` otherwise), so nobody
+writes back a stale copy; a draft sent or discarded meanwhile raises `Gone` instead of coming back.
 """
 
+import fcntl
 import json
 import shutil
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field, replace
 from email.headerregistry import Address
 from email.message import EmailMessage
 from email.utils import formatdate, getaddresses, make_msgid
@@ -20,7 +26,19 @@ from .config import STATE_DIR, Config
 
 DRAFT_DIR = STATE_DIR / "drafts"
 GONE_FILE = STATE_DIR / "drafts-gone.json"     # {message_id: gmail_msgid} still to delete from Gmail
-_live: dict[str, "Draft"] = {}     # one object per draft, shared by the UI and the sync thread
+LOCK_FILE = STATE_DIR / "drafts.lock"
+FIELDS = ("ident", "to", "cc", "subject", "body")   # what compose edits
+
+
+class Changed(Exception):
+    """Saved elsewhere since this copy was read; `draft` is that newer version."""
+    def __init__(self, draft: "Draft"):
+        super().__init__(draft.id)
+        self.draft = draft
+
+
+class Gone(Exception):
+    """Sent or discarded elsewhere since this copy was read."""
 
 
 @dataclass
@@ -40,6 +58,8 @@ class Draft:
     initial_body: str = ""                            # what compose started with (quote of a reply)
     initial: list = field(default_factory=list)       # [to, cc, subject, body] when compose opened
     edited: bool = False                              # ever differed from `initial`
+    rev: int = 0                                      # saves so far (0: never saved here)
+    synced: int = 0                                   # the revision that is in Gmail's Drafts
 
     @property
     def title(self) -> str:
@@ -76,7 +96,6 @@ def new(ident: str, to="", cc="", subject="", body="", quote="", headers=None, a
                        part.get_payload(decode=True) or b"")
     _clean(d)
     d.initial = d.snapshot()
-    _live[d.id] = d
     return d
 
 
@@ -115,28 +134,63 @@ def _clean(d: Draft) -> Draft:
     return d
 
 
-def save(d: Draft):
-    _clean(d)
-    d.updated = time.time()
+def fields(d: Draft) -> dict:
+    """The fields compose edits, as a save would store them."""
+    c = _clean(replace(d, attachments=[dict(a) for a in d.attachments]))
+    return {k: getattr(c, k) for k in FIELDS}
+
+
+@contextmanager
+def _locked():
+    """One writer at a time: the client's threads, a second window and the `mail` command."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LOCK_FILE, "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def _read(path) -> Draft | None:
+    try:
+        d = _clean(Draft(**json.loads(path.read_text())))
+    except (OSError, ValueError, TypeError):
+        return None
+    d.rev = max(d.rev, 1)       # saved before revisions were counted: still a saved draft
+    return d
+
+
+def _write(d: Draft):
     DRAFT_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = DRAFT_DIR / f"{d.id}.tmp"
+    tmp = DRAFT_DIR / f"{d.id}.{uuid.uuid4().hex[:8]}.tmp"
     tmp.write_text(json.dumps(asdict(d), ensure_ascii=False))
     tmp.replace(DRAFT_DIR / f"{d.id}.json")
 
 
+def load(did: str) -> Draft | None:
+    """The saved version of a draft, None when there is none (never saved, sent or discarded)."""
+    return _read(DRAFT_DIR / f"{did}.json")
+
+
+def save(d: Draft):
+    """Store `d` as the next revision. Raises Changed when someone saved a newer one since `d`
+    was read, and Gone when it was sent or discarded meanwhile; nothing is written then."""
+    _clean(d)
+    with _locked():
+        disk = load(d.id)
+        if disk is None and d.rev:
+            raise Gone(d.id)
+        if disk is not None and disk.rev != d.rev:
+            raise Changed(disk)
+        d.rev += 1
+        d.updated = time.time()
+        _write(d)
+
+
 def load_all() -> list[Draft]:
-    out = []
-    for p in DRAFT_DIR.glob("*.json") if DRAFT_DIR.exists() else []:
-        try:
-            d = Draft(**json.loads(p.read_text()))
-        except (ValueError, TypeError):
-            continue
-        out.append(_live.setdefault(d.id, _clean(d)))
+    out = [d for p in DRAFT_DIR.glob("*.json") if (d := _read(p))] if DRAFT_DIR.exists() else []
     return sorted(out, key=lambda d: d.updated, reverse=True)
 
 
 def delete(d: Draft):
-    _live.pop(d.id, None)
     (DRAFT_DIR / f"{d.id}.json").unlink(missing_ok=True)
     shutil.rmtree(_dir(d), ignore_errors=True)
 
@@ -167,12 +221,28 @@ def build(cfg: Config, d: Draft) -> EmailMessage:
 
 
 def sync_to_gmail(cfg: Config, mbox, d: Draft) -> int:
-    """Put the current version into Gmail's Drafts and drop the previous one."""
-    new_id = mbox.append_draft(build(cfg, d).as_bytes())
-    d.gmail_msgid = new_id
-    if d.id in _live or (DRAFT_DIR / f"{d.id}.json").exists():
-        save(d)
-    mbox.delete_drafts([v for v in mbox.draft_versions(d.message_id) if v != new_id])
+    """Put the saved revision `d.rev` into Gmail's Drafts and drop the older copies. Does nothing
+    when that revision is no longer the saved one (a newer save syncs itself; a sent or discarded
+    draft stays deleted), and takes the copy back when that happened during the upload."""
+    rev = d.rev
+    disk = load(d.id)
+    if disk is None or disk.rev != rev:
+        return 0
+    new_id = mbox.append_draft(build(cfg, disk).as_bytes())
+    with _locked():
+        now = load(d.id)
+        current = now is not None and now.rev == rev
+        if current:
+            now.gmail_msgid = new_id
+            now.synced = rev
+            _write(now)
+    if not current:
+        mbox.delete_drafts([new_id])
+        return 0
+    if d.rev == rev:
+        d.gmail_msgid, d.synced = new_id, rev
+    # Only older copies: X-GM-MSGIDs grow, and a newer one is a newer save's upload.
+    mbox.delete_drafts([v for v in mbox.draft_versions(d.message_id) if v < new_id])
     return new_id
 
 
@@ -192,9 +262,10 @@ def _set_gone(gone: dict[str, int]):
 
 def forget(d: Draft):
     """Sent or discarded: delete it here now, and remember to delete it from Gmail (`purge`)."""
-    if d.message_id or d.gmail_msgid:
-        _set_gone({**_gone(), d.message_id or str(d.gmail_msgid): d.gmail_msgid})
-    delete(d)
+    with _locked():
+        if d.message_id or d.gmail_msgid:
+            _set_gone({**_gone(), d.message_id or str(d.gmail_msgid): d.gmail_msgid})
+        delete(d)
 
 
 def purge(mbox) -> int:
@@ -205,7 +276,8 @@ def purge(mbox) -> int:
         mbox.delete_drafts(ids)
         n += len(ids)
     if gone:
-        _set_gone({k: v for k, v in _gone().items() if k not in gone})   # keep ones forgotten meanwhile
+        with _locked():
+            _set_gone({k: v for k, v in _gone().items() if k not in gone})   # keep ones forgotten meanwhile
     return n
 
 
@@ -238,3 +310,18 @@ def from_gmail(cfg: Config, m, parsed) -> Draft:
             gmail_msgid=m.msgid)
     d.initial_body, d.edited = "", True
     return d
+
+
+def adopt(cfg: Config, local: Draft, m, parsed) -> Draft:
+    """A draft's Gmail copy `m` was changed elsewhere (on the phone): continue the local draft
+    with that text. Its attachments stay the local ones."""
+    g = from_gmail(cfg, m, parsed)
+    shutil.rmtree(_dir(g), ignore_errors=True)
+    for k in ("to", "cc", "subject", "body"):
+        setattr(local, k, getattr(g, k))
+    local.gmail_msgid, local.synced = m.msgid, local.rev + 1    # what save() makes it: Gmail has it
+    try:
+        save(local)
+    except (Changed, Gone):
+        pass                    # changed here meanwhile: compose shows the saved version
+    return load(local.id) or local
