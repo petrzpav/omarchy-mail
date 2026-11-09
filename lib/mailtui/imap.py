@@ -403,6 +403,19 @@ class Mailbox:
             return sorted(msgs, key=lambda m: (m.date.timestamp() if m.date else 0, m.uid))
         return self._run(go)
 
+    # -- sent
+
+    def append_sent(self, raw: bytes):
+        """File a message sent through an identity's own SMTP server into Gmail's Sent, where
+        Gmail SMTP files the messages it sends itself."""
+        sent = self.folder("sent").raw
+
+        def go(c):
+            typ, data = c.append(quote(sent), "(\\Seen)", None, raw)
+            if typ != "OK":
+                raise ImapError(f"saving to Sent failed: {data}")
+        self._run(go)
+
     # -- drafts
 
     def append_draft(self, raw: bytes) -> int:
