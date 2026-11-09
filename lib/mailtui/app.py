@@ -33,7 +33,7 @@ from textual.worker import get_current_worker
 
 from . import config, drafts, jev, ops, smtp, store as cache, text
 from .config import CACHE_DIR, Category, Config
-from .imap import Folder, Msg, parse
+from .imap import Folder, ImapError, Msg, parse
 from .store import Store
 from .text import formataddr
 
@@ -768,13 +768,23 @@ class Compose(ModalScreen[str]):
         app.notify(f"Sending from {ident.email}…", timeout=2)
 
         def send():
-            smtp.send(cfg, ident, drafts.build(cfg, d))
+            msg = drafts.build(cfg, d)
+            smtp.send(cfg, ident, msg)
             drafts.forget(d)
+            filed = True
+            if ident.smtp:           # Gmail files only what it sends itself
+                try:
+                    store.drafts_mbox.append_sent(msg.as_bytes())
+                except ImapError:
+                    filed = False
             drafts.purge(store.drafts_mbox)
-            return ident.email
+            return ident.email, filed
 
-        def sent(address):
+        def sent(result):
+            address, filed = result
             app.notify(f"Sent from {address}", timeout=3)
+            if not filed:
+                app.notify("Sent, but not saved to Sent", severity="warning", timeout=8)
             app.main.paint_drafts()
             app.main.after_send(d)
 

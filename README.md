@@ -141,7 +141,10 @@ Ctrl+click opens a link in the message shown under a reply or forward.
 
 Sending goes through Gmail SMTP, which only accepts From addresses verified as "Send mail as" in
 Gmail settings. For any other address, give that identity `smtp = "host:port"` in config.toml and
-put its password in secrets as `SMTP_PASSWORD_<ADDRESS_IN_CAPS_WITH_UNDERSCORES>`.
+put its password in secrets as `SMTP_PASSWORD_<ADDRESS_IN_CAPS_WITH_UNDERSCORES>`. Mail sent that way
+is saved to Gmail's Sent by the client. Use it also for a domain with DMARC: Gmail SMTP sends
+with your Gmail address as the envelope sender and no DKIM signature for the domain, so such
+mail fails DMARC.
 
 Jev's review refreshes whenever you stop typing for a few seconds (`review_auto = false` under
 `[jev]` turns that off) and on `Alt+J`. Your own criteria can replace the defaults: `[[review]]`

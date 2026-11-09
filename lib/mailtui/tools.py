@@ -440,13 +440,19 @@ def cmd_send(cfg: Config, args):
     if not d.to:
         _die("the draft has no recipient")
     ident = cfg.identity_for(d.ident)
+    msg = drafts.build(cfg, d)
     try:
-        smtp.send(cfg, ident, drafts.build(cfg, d))
+        smtp.send(cfg, ident, msg)
     except smtp.SendError as e:
         _die(f"not sent, kept as a draft: {e}")
     drafts.forget(d)
-    store.announce("sent")
     mbox = Mailbox(cfg)
+    if ident.smtp:               # Gmail files only what it sends itself
+        try:
+            mbox.append_sent(msg.as_bytes())
+        except ImapError as e:
+            print(f"sent, but not saved to Sent: {e}", file=sys.stderr)
+    store.announce("sent")
     try:
         drafts.purge(mbox)
     except ImapError:
