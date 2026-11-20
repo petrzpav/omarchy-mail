@@ -439,6 +439,8 @@ def cmd_send(cfg: Config, args):
     d = _find_draft(args.draft)
     if not d.to:
         _die("the draft has no recipient")
+    if drafts.blank_subject(d.subject):
+        _die("the draft has no subject; add one with `mail edit-draft DRAFT --subject …`")
     ident = cfg.identity_for(d.ident)
     msg = drafts.build(cfg, d)
     try:

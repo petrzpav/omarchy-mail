@@ -64,6 +64,7 @@ mail discard DRAFT
 
 - `draft` saves the message locally and in Gmail Drafts. The user sees it in the TUI (Ctrl+O) and on the phone.
 - `draft` never sends anything.
+- `send` refuses a draft without a subject (empty, or only `Re:`/`Fwd:`). Give every new mail a subject.
 - Reply/forward fills in the recipients, `Re:`/`Fwd:` subject, threading headers and quoted text, like the client.
 - The sending identity is the one the original mail was addressed to.
 - `--reply THREAD_ID` answers the newest message in that thread not sent by the user. `--reply MSGID` answers that exact message.
