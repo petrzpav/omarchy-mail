@@ -430,7 +430,8 @@ class Compose(ModalScreen[str]):
                 with Vertical(id="compose-left"):
                     for fid, label, value in (("to", "To", d.to), ("cc", "Cc", d.cc), ("subject", "Subject", d.subject)):
                         with Horizontal(classes="row") as row:
-                            row.display = not (reply and fid == "subject")    # the title says it
+                            # The title says it, unless there is nothing to say.
+                            row.display = not (reply and fid == "subject" and not drafts.blank_subject(value))
                             yield Label(label, classes="field")
                             if fid == "subject":
                                 yield Input(value=value, id=fid, compact=True)
@@ -750,6 +751,12 @@ class Compose(ModalScreen[str]):
         d = self.draft
         if not d.to:
             self.notify("Add a recipient", severity="warning")
+            return
+        if drafts.blank_subject(d.subject):
+            subject = self.query_one("#subject", Input)
+            subject.parent.display = True
+            subject.focus()
+            self.notify("Add a subject", severity="warning")
             return
         self._merged = self._lost = False
         self._outside()                # what the `mail` command did a moment ago counts too

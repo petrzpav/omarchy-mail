@@ -5,6 +5,7 @@ import ssl
 from email.message import EmailMessage
 
 from .config import Config, Identity
+from .drafts import blank_subject
 
 
 class SendError(Exception):
@@ -12,6 +13,8 @@ class SendError(Exception):
 
 
 def send(cfg: Config, ident: Identity, msg: EmailMessage):
+    if blank_subject(str(msg["Subject"] or "")):
+        raise SendError("the message has no subject")
     if ident.smtp:
         host, _, port = ident.smtp.partition(":")
         user, password = ident.email, cfg.secrets.get(ident.secret_key, "")

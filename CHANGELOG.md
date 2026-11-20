@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [0.3.3] - 2026-11-20
+
+### Changed
+
+- Mail without a subject is not sent; the client asks for one and `mail send` refuses the draft.
+
 ## [0.3.2] - 2026-11-09
 
 ### Fixed
@@ -125,6 +131,7 @@ _Stable release based on [0.3.0-rc.1]._
 - Compact reply and forward, with the original message below; compose fills the terminal.
 - `install.sh` for anyone, with `--remove`; examples and a demo on a made-up inbox.
 
+[0.3.3]: https://github.com/petrzpav/omarchy-mail/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/petrzpav/omarchy-mail/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/petrzpav/omarchy-mail/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/petrzpav/omarchy-mail/compare/v0.2.6...v0.3.0

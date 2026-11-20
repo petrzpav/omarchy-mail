@@ -12,6 +12,7 @@ writes back a stale copy; a draft sent or discarded meanwhile raises `Gone` inst
 
 import fcntl
 import json
+import re
 import shutil
 import time
 import uuid
@@ -193,6 +194,14 @@ def load_all() -> list[Draft]:
 def delete(d: Draft):
     (DRAFT_DIR / f"{d.id}.json").unlink(missing_ok=True)
     shutil.rmtree(_dir(d), ignore_errors=True)
+
+
+_PREFIX = re.compile(r"^\s*((re|fwd?)\s*:\s*)*", re.I)
+
+
+def blank_subject(subject: str) -> bool:
+    """True when the subject is empty, or only Re:/Fwd: with nothing after it."""
+    return not _PREFIX.sub("", subject or "").strip()
 
 
 def build(cfg: Config, d: Draft) -> EmailMessage:
